@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.Splines;
+using Unity.Mathematics;
 
 namespace SortingFactory.Phase1
 {
@@ -14,17 +15,19 @@ namespace SortingFactory.Phase1
         [SerializeField] private bool placeLastWorkstationOnOppositeSide = true;
         [SerializeField] private Vector3 workstationPathPositions = new Vector3(0.18f, 0.5f, 0.86f);
 
-        [Header("Initial Objects")]
+        [Header("Sorting Feed Area")]
         [SerializeField, Min(1)] private int objectCount = 15;
-        [SerializeField, Range(0f, 1f)] private float firstObjectPathPosition = 0.035f;
-        [SerializeField, Range(0f, 1f)] private float lastObjectPathPosition = 0.63f;
-        [SerializeField] private float laneSpread = 0.18f;
+        [SerializeField] private Vector2 sortingAreaSize = new Vector2(8f, 6f);
+        [SerializeField, Min(0.2f)] private float feederBeltWidth = 2.6f;
+        [SerializeField, Range(0.2f, 1f)] private float initialObjectScale = 0.62f;
+        [SerializeField, Min(0.2f)] private float objectReleaseInterval = 1.35f;
         [SerializeField] private int randomSeed = 2026;
         [SerializeField] private GameObject[] objectPrefabs;
 
         [SerializeField, HideInInspector] private Material[] stationMaterials;
         [SerializeField, HideInInspector] private Material[] objectMaterials;
         [SerializeField, HideInInspector] private Material guideMaterial;
+        [SerializeField, HideInInspector] private Material feederBeltMaterial;
 
         public const string SceneContentRootName = "Phase1 Scene Content";
 
@@ -34,11 +37,13 @@ namespace SortingFactory.Phase1
         public void ConfigureGeneratedMaterials(
             Material[] newStationMaterials,
             Material[] newObjectMaterials,
-            Material newGuideMaterial)
+            Material newGuideMaterial,
+            Material newFeederBeltMaterial)
         {
             stationMaterials = newStationMaterials;
             objectMaterials = newObjectMaterials;
             guideMaterial = newGuideMaterial;
+            feederBeltMaterial = newFeederBeltMaterial;
         }
 
         public Transform BuildSceneContent()
@@ -53,7 +58,8 @@ namespace SortingFactory.Phase1
             }
 
             if (stationMaterials == null || stationMaterials.Length == 0 ||
-                objectMaterials == null || objectMaterials.Length == 0 || guideMaterial == null)
+                objectMaterials == null || objectMaterials.Length == 0 ||
+                guideMaterial == null || feederBeltMaterial == null)
             {
                 Debug.LogError("Step 1 materials are missing. Use the Build Step 1 Scene button in the Inspector.", this);
                 return null;
@@ -77,8 +83,8 @@ namespace SortingFactory.Phase1
                     stationMaterials[i % stationMaterials.Length]);
             }
 
-            CreateEntrance(contentRoot, conveyorPath, beltSurfaceY);
-            CreateInitialObjects(contentRoot, conveyorPath, beltSurfaceY);
+            SortingAreaLayout sortingArea = CreateSortingArea(contentRoot, conveyorPath, beltSurfaceY);
+            CreateInitialObjects(contentRoot, conveyorPath, sortingArea, beltSurfaceY);
 
             Debug.Log($"Step 1 scene content built: {workstationCount} workstations and {objectCount} placed objects.", this);
             return contentRoot;
@@ -214,42 +220,164 @@ namespace SortingFactory.Phase1
             robot.transform.localRotation = Quaternion.identity;
         }
 
-        private void CreateEntrance(Transform parent, SplineContainer conveyorPath, float beltSurfaceY)
+        private SortingAreaLayout CreateSortingArea(
+            Transform parent,
+            SplineContainer conveyorPath,
+            float beltSurfaceY)
         {
-            Vector3 position = conveyorPath.EvaluatePosition(firstObjectPathPosition);
-            Vector3 tangent = Flatten(conveyorPath.EvaluateTangent(firstObjectPathPosition));
+            Vector3 mainEntry = conveyorPath.EvaluatePosition(0f);
+            Vector3 loopCenter = Vector3.zero;
+            const int centerSamples = 32;
+            for (int i = 0; i < centerSamples; i++)
+            {
+                loopCenter += (Vector3)conveyorPath.EvaluatePosition(i / (float)centerSamples);
+            }
+            loopCenter /= centerSamples;
 
-            Transform entrance = new GameObject("ObjectDispersalGuide").transform;
-            entrance.SetParent(parent, false);
-            entrance.SetPositionAndRotation(
-                new Vector3(position.x, beltSurfaceY + 0.18f, position.z),
-                Quaternion.LookRotation(tangent, Vector3.up));
+            Vector3 outward = Flatten(mainEntry - loopCenter);
+            Vector3 feedDirection = -outward;
+            Vector3 right = Vector3.Cross(Vector3.up, feedDirection).normalized;
+            Vector3 sortingCenter = mainEntry + outward * 12f;
+            Vector3 feederStart = sortingCenter + feedDirection * (sortingAreaSize.y * 0.5f);
+            Vector3 feederMiddleA = mainEntry + outward * 6f;
+            Vector3 feederMiddleB = mainEntry + outward * 2.8f;
 
-            PrototypeVisualFactory.CreateGuideRail(entrance, -0.88f, guideMaterial);
-            PrototypeVisualFactory.CreateGuideRail(entrance, 0.88f, guideMaterial);
+            Transform sortingRoot = new GameObject("InitialSortingArea").transform;
+            sortingRoot.SetParent(parent, false);
+            sortingRoot.SetPositionAndRotation(
+                new Vector3(sortingCenter.x, beltSurfaceY - 0.09f, sortingCenter.z),
+                Quaternion.LookRotation(feedDirection, Vector3.up));
+            PrototypeVisualFactory.CreateSortingPlatform(
+                sortingRoot,
+                sortingAreaSize,
+                feederBeltMaterial,
+                guideMaterial);
+
+            Transform feederVisuals = new GameObject("FeederBelt_To_MainConveyor").transform;
+            feederVisuals.SetParent(parent, false);
+            PrototypeVisualFactory.CreateFeederBeltSegment(
+                feederVisuals,
+                feederStart,
+                feederMiddleA,
+                beltSurfaceY,
+                feederBeltWidth,
+                feederBeltMaterial,
+                guideMaterial);
+            PrototypeVisualFactory.CreateFeederBeltSegment(
+                feederVisuals,
+                feederMiddleA,
+                feederMiddleB,
+                beltSurfaceY,
+                feederBeltWidth,
+                feederBeltMaterial,
+                guideMaterial);
+            PrototypeVisualFactory.CreateFeederBeltSegment(
+                feederVisuals,
+                feederMiddleB,
+                mainEntry,
+                beltSurfaceY,
+                feederBeltWidth,
+                feederBeltMaterial,
+                guideMaterial);
+
+            GameObject feederPathObject = new GameObject("SortingFeederPath");
+            feederPathObject.transform.SetParent(parent, false);
+            SplineContainer feederPath = feederPathObject.AddComponent<SplineContainer>();
+            Spline feederSpline = new Spline();
+            feederSpline.Add((float3)feederStart, TangentMode.AutoSmooth);
+            feederSpline.Add((float3)feederMiddleA, TangentMode.AutoSmooth);
+            feederSpline.Add((float3)feederMiddleB, TangentMode.AutoSmooth);
+            feederSpline.Add((float3)mainEntry, TangentMode.AutoSmooth);
+            feederSpline.Closed = false;
+            feederPath.Spline = feederSpline;
+
+            return new SortingAreaLayout
+            {
+                FeederPath = feederPath,
+                Center = new Vector3(sortingCenter.x, beltSurfaceY + 0.08f, sortingCenter.z),
+                Forward = feedDirection,
+                Right = right
+            };
         }
 
-        private void CreateInitialObjects(Transform parent, SplineContainer conveyorPath, float beltSurfaceY)
+        private void CreateInitialObjects(
+            Transform parent,
+            SplineContainer conveyorPath,
+            SortingAreaLayout sortingArea,
+            float beltSurfaceY)
         {
-            Transform objectsRoot = new GameObject($"InitialObjects_{objectCount}").transform;
+            Transform objectsRoot = new GameObject($"SortingAreaObjects_{objectCount}").transform;
             objectsRoot.SetParent(parent, false);
             System.Random random = new System.Random(randomSeed);
+            Vector2[] positions = CreateScatteredPositions(random);
+            Vector3 feederStartPosition = sortingArea.FeederPath.EvaluatePosition(0f);
 
             for (int i = 0; i < objectCount; i++)
             {
-                float progress = objectCount == 1 ? 0f : i / (objectCount - 1f);
-                float pathT = Mathf.Lerp(firstObjectPathPosition, lastObjectPathPosition, progress);
-                Vector3 pathPosition = conveyorPath.EvaluatePosition(pathT);
-                Vector3 tangent = Flatten(conveyorPath.EvaluateTangent(pathT));
-                Vector3 side = Vector3.Cross(Vector3.up, tangent).normalized;
-                float sideOffset = Mathf.Lerp(-laneSpread, laneSpread, (float)random.NextDouble());
-
+                Vector3 randomOffset =
+                    sortingArea.Right * positions[i].x + sortingArea.Forward * positions[i].y;
                 GameObject item = CreateInitialObject(i, random);
                 item.transform.SetParent(objectsRoot, true);
+                item.transform.localScale *= initialObjectScale;
                 item.transform.SetPositionAndRotation(
-                    new Vector3(pathPosition.x, beltSurfaceY + 0.08f, pathPosition.z) + side * sideOffset,
-                    Quaternion.LookRotation(tangent, Vector3.up));
+                    sortingArea.Center + randomOffset,
+                    Quaternion.Euler(0f, Mathf.Lerp(0f, 360f, (float)random.NextDouble()), 0f));
+
+                SortingAreaFeedObject feedObject = item.GetComponent<SortingAreaFeedObject>();
+                if (feedObject == null)
+                {
+                    feedObject = item.AddComponent<SortingAreaFeedObject>();
+                }
+
+                float releaseDelay = i * objectReleaseInterval + Mathf.Lerp(0f, 0.35f, (float)random.NextDouble());
+                float feederHeight = beltSurfaceY + 0.08f - feederStartPosition.y;
+                Vector3 mainEntry = conveyorPath.EvaluatePosition(0f);
+                float mainHeight = beltSurfaceY + 0.08f - mainEntry.y;
+                feedObject.Configure(
+                    sortingArea.FeederPath,
+                    conveyorPath,
+                    releaseDelay,
+                    feederHeight,
+                    mainHeight);
             }
+        }
+
+        private Vector2[] CreateScatteredPositions(System.Random random)
+        {
+            Vector2[] positions = new Vector2[objectCount];
+            float halfWidth = sortingAreaSize.x * 0.5f - 0.65f;
+            float halfLength = sortingAreaSize.y * 0.5f - 0.65f;
+            const float minimumSpacing = 0.72f;
+
+            for (int i = 0; i < positions.Length; i++)
+            {
+                Vector2 candidate = Vector2.zero;
+                for (int attempt = 0; attempt < 50; attempt++)
+                {
+                    candidate = new Vector2(
+                        Mathf.Lerp(-halfWidth, halfWidth, (float)random.NextDouble()),
+                        Mathf.Lerp(-halfLength, halfLength, (float)random.NextDouble()));
+
+                    bool overlaps = false;
+                    for (int previous = 0; previous < i; previous++)
+                    {
+                        if ((positions[previous] - candidate).sqrMagnitude < minimumSpacing * minimumSpacing)
+                        {
+                            overlaps = true;
+                            break;
+                        }
+                    }
+
+                    if (!overlaps)
+                    {
+                        break;
+                    }
+                }
+
+                positions[i] = candidate;
+            }
+
+            return positions;
         }
 
         private GameObject CreateInitialObject(int index, System.Random random)
@@ -310,6 +438,14 @@ namespace SortingFactory.Phase1
             return placeLastWorkstationOnOppositeSide && workstationCount > 1 && index == workstationCount - 1
                 ? -1f
                 : 1f;
+        }
+
+        private struct SortingAreaLayout
+        {
+            public SplineContainer FeederPath;
+            public Vector3 Center;
+            public Vector3 Forward;
+            public Vector3 Right;
         }
 
         private static Vector3 Flatten(Vector3 direction)

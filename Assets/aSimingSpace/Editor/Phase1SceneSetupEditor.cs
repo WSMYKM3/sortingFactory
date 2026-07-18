@@ -20,6 +20,11 @@ namespace SortingFactory.Editor
                 {
                     Phase1SceneBuilder.Build((Phase1SceneSetup)target, true);
                 }
+
+                if (GUILayout.Button("Build Closed Conveyor Loop", GUILayout.Height(26f)))
+                {
+                    ConveyorLoopSceneBuilder.BuildLoop(true);
+                }
             }
         }
     }
@@ -78,8 +83,13 @@ namespace SortingFactory.Editor
                 GetOrCreateMaterial("Object_White", new Color(0.82f, 0.85f, 0.88f))
             };
             Material guideMaterial = GetOrCreateMaterial("Dispersal_Guide", new Color(0.9f, 0.72f, 0.12f));
+            Material feederBeltMaterial = GetOrCreateMaterial("Feeder_Belt", new Color(0.12f, 0.14f, 0.16f));
 
-            setup.ConfigureGeneratedMaterials(stationMaterials, objectMaterials, guideMaterial);
+            setup.ConfigureGeneratedMaterials(
+                stationMaterials,
+                objectMaterials,
+                guideMaterial,
+                feederBeltMaterial);
             Transform contentRoot = setup.BuildSceneContent();
             if (contentRoot == null)
             {
@@ -111,7 +121,9 @@ namespace SortingFactory.Editor
             }
 
             Phase1SceneSetup setup = Object.FindFirstObjectByType<Phase1SceneSetup>();
-            if (setup != null && !setup.HasSceneContent)
+            bool needsSortingArea = setup != null &&
+                setup.GetComponentInChildren<SortingAreaFeedObject>(true) == null;
+            if (setup != null && (!setup.HasSceneContent || needsSortingArea))
             {
                 Build(setup, false);
             }

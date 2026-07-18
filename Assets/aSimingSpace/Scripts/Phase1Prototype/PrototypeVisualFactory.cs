@@ -81,6 +81,76 @@ namespace SortingFactory.Phase1
             rail.localRotation = Quaternion.Euler(0f, side < 0f ? -8f : 8f, 0f);
         }
 
+        public static void CreateSortingPlatform(
+            Transform parent,
+            Vector2 size,
+            Material beltMaterial,
+            Material edgeMaterial)
+        {
+            CreatePrimitive(
+                "SortingDeck",
+                PrimitiveType.Cube,
+                parent,
+                Vector3.zero,
+                new Vector3(size.x, 0.18f, size.y),
+                beltMaterial,
+                true);
+            CreateWireBox(
+                parent,
+                new Vector3(size.x, 0.65f, size.y),
+                edgeMaterial,
+                0.055f);
+        }
+
+        public static void CreateFeederBeltSegment(
+            Transform parent,
+            Vector3 start,
+            Vector3 end,
+            float surfaceY,
+            float width,
+            Material beltMaterial,
+            Material railMaterial)
+        {
+            Vector3 direction = end - start;
+            direction.y = 0f;
+            float length = direction.magnitude;
+            if (length <= 0.001f)
+            {
+                return;
+            }
+
+            Transform segment = new GameObject("FeederBeltSegment").transform;
+            segment.SetParent(parent, true);
+            segment.SetPositionAndRotation(
+                new Vector3((start.x + end.x) * 0.5f, surfaceY - 0.09f, (start.z + end.z) * 0.5f),
+                Quaternion.LookRotation(direction.normalized, Vector3.up));
+
+            CreatePrimitive(
+                "BeltSurface",
+                PrimitiveType.Cube,
+                segment,
+                Vector3.zero,
+                new Vector3(width, 0.18f, length + 0.12f),
+                beltMaterial,
+                true);
+            CreatePrimitive(
+                "LeftRail",
+                PrimitiveType.Cube,
+                segment,
+                new Vector3(-width * 0.5f, 0.24f, 0f),
+                new Vector3(0.08f, 0.48f, length + 0.12f),
+                railMaterial,
+                true);
+            CreatePrimitive(
+                "RightRail",
+                PrimitiveType.Cube,
+                segment,
+                new Vector3(width * 0.5f, 0.24f, 0f),
+                new Vector3(0.08f, 0.48f, length + 0.12f),
+                railMaterial,
+                true);
+        }
+
         public static GameObject CreatePickableObject(PrototypeObjectKind kind, Material material, int index)
         {
             GameObject root = new GameObject($"Pickable_{index:00}_{kind}");
