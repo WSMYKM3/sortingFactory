@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.Splines;
 using Unity.Mathematics;
+using SortingFactory.Step2;
 
 namespace SortingFactory.Phase1
 {
@@ -9,6 +10,7 @@ namespace SortingFactory.Phase1
         [Header("Workstations")]
         [SerializeField, Min(1)] private int workstationCount = 3;
         [SerializeField] private Vector3 workspaceSize = new Vector3(3.2f, 2.4f, 2.6f);
+        [SerializeField, Range(0.5f, 3f)] private float robotAndWorkspaceScale = 1.5f;
         [SerializeField] private float robotSideOffset = 3.5f;
         [SerializeField] private float dropZoneSideOffset = 5.2f;
         [SerializeField] private GameObject robotArmPrefab;
@@ -28,11 +30,15 @@ namespace SortingFactory.Phase1
         [SerializeField, HideInInspector] private Material[] objectMaterials;
         [SerializeField, HideInInspector] private Material guideMaterial;
         [SerializeField, HideInInspector] private Material feederBeltMaterial;
+        [SerializeField, HideInInspector] private int generatedContentVersion;
 
         public const string SceneContentRootName = "Phase1 Scene Content";
+        public const int CurrentGeneratedContentVersion = 2;
 
         public GameObject RobotArmPrefab => robotArmPrefab;
         public bool HasSceneContent => transform.Find(SceneContentRootName) != null;
+        public bool NeedsGeneratedContentUpgrade =>
+            generatedContentVersion < CurrentGeneratedContentVersion;
 
         public void ConfigureGeneratedMaterials(
             Material[] newStationMaterials,
@@ -83,8 +89,11 @@ namespace SortingFactory.Phase1
                     stationMaterials[i % stationMaterials.Length]);
             }
 
+            contentRoot.gameObject.AddComponent<Step2CameraDebugPanel>();
+
             SortingAreaLayout sortingArea = CreateSortingArea(contentRoot, conveyorPath, beltSurfaceY);
             CreateInitialObjects(contentRoot, conveyorPath, sortingArea, beltSurfaceY);
+            generatedContentVersion = CurrentGeneratedContentVersion;
 
             Debug.Log($"Step 1 scene content built: {workstationCount} workstations and {objectCount} placed objects.", this);
             return contentRoot;
@@ -178,25 +187,56 @@ namespace SortingFactory.Phase1
             RobotWorkstation station = stationObject.AddComponent<RobotWorkstation>();
             station.Configure($"arm_{index + 1}", $"arm_{index + 1}_camera", pathT);
 
-            float workspaceCenterY = beltSurfaceY + workspaceSize.y * 0.5f;
+            float stationScale = Mathf.Max(0.1f, robotAndWorkspaceScale);
+            Vector3 scaledWorkspaceSize = workspaceSize * stationScale;
+            float workspaceCenterY = beltSurfaceY + scaledWorkspaceSize.y * 0.5f;
             GameObject workspace = new GameObject("WorkspaceVolume");
             workspace.transform.SetParent(stationObject.transform, false);
             workspace.transform.localPosition = new Vector3(0f, workspaceCenterY, 0f);
             BoxCollider workspaceTrigger = workspace.AddComponent<BoxCollider>();
             workspaceTrigger.isTrigger = true;
-            workspaceTrigger.size = workspaceSize;
-            PrototypeVisualFactory.CreateWireBox(workspace.transform, workspaceSize, stationMaterial, 0.045f);
+            workspaceTrigger.size = scaledWorkspaceSize;
+            PrototypeVisualFactory.CreateWireBox(
+                workspace.transform,
+                scaledWorkspaceSize,
+                stationMaterial,
+                0.045f * stationScale);
 
             Transform robotMount = new GameObject("RobotMount").transform;
             robotMount.SetParent(stationObject.transform, false);
             robotMount.localPosition = new Vector3(sideSign * robotSideOffset, 0f, 0f);
             robotMount.localRotation = sideSign > 0f ? Quaternion.identity : Quaternion.Euler(0f, 180f, 0f);
+            robotMount.localScale = Vector3.one * stationScale;
             CreateRobotArm(robotMount, stationMaterial);
 
             Transform cameraMount = new GameObject("CameraMount_Step2").transform;
             cameraMount.SetParent(stationObject.transform, false);
-            cameraMount.localPosition = new Vector3(sideSign * robotSideOffset * 0.45f, beltSurfaceY + 4.2f, 0f);
-            cameraMount.localRotation = Quaternion.Euler(68f, sideSign > 0f ? -90f : 90f, 0f);
+            cameraMount.localPosition = new Vector3(
+                sideSign * robotSideOffset * 0.45f * stationScale,
+                beltSurfaceY + 4.2f * stationScale,
+                0f);
+            cameraMount.rotation = Quaternion.LookRotation(
+                workspaceTrigger.bounds.center - cameraMount.position,
+                Vector3.up);
+
+            Camera stationCamera = cameraMount.gameObject.AddComponent<Camera>();
+            stationCamera.enabled = false;
+            stationCamera.fieldOfView = 58f;
+            stationCamera.nearClipPlane = 0.08f;
+            stationCamera.farClipPlane = 40f;
+            stationCamera.depth = -10f - index;
+
+            WorkstationCameraController cameraController =
+                cameraMount.gameObject.AddComponent<WorkstationCameraController>();
+            cameraController.Configure(
+                $"arm_{index + 1}",
+                $"arm_{index + 1}_camera",
+                stationCamera,
+                workspaceTrigger,
+                1280,
+                720,
+                10f,
+                85);
 
             Transform dropZone = new GameObject($"DropZone_{index + 1}").transform;
             dropZone.SetParent(stationObject.transform, false);

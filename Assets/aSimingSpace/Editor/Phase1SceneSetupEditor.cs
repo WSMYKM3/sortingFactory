@@ -1,4 +1,5 @@
 using SortingFactory.Phase1;
+using SortingFactory.Step2;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -16,7 +17,7 @@ namespace SortingFactory.Editor
 
             using (new EditorGUI.DisabledScope(EditorApplication.isPlayingOrWillChangePlaymode))
             {
-                if (GUILayout.Button("Build / Rebuild Step 1 Scene", GUILayout.Height(30f)))
+                if (GUILayout.Button("Build / Rebuild Steps 1-2 Scene", GUILayout.Height(30f)))
                 {
                     Phase1SceneBuilder.Build((Phase1SceneSetup)target, true);
                 }
@@ -41,13 +42,13 @@ namespace SortingFactory.Editor
             EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
         }
 
-        [MenuItem("Tools/Sorting Factory/Build Step 1 Scene")]
+        [MenuItem("Tools/Sorting Factory/Build Steps 1-2 Scene")]
         public static void BuildFromMenu()
         {
             Phase1SceneSetup setup = Object.FindFirstObjectByType<Phase1SceneSetup>();
             if (setup == null)
             {
-                Debug.LogError("Open MainScene and select Phase1 Scene Setup before building Step 1.");
+                Debug.LogError("Open MainScene and select Phase1 Scene Setup before building Steps 1-2.");
                 return;
             }
 
@@ -123,7 +124,13 @@ namespace SortingFactory.Editor
             Phase1SceneSetup setup = Object.FindFirstObjectByType<Phase1SceneSetup>();
             bool needsSortingArea = setup != null &&
                 setup.GetComponentInChildren<SortingAreaFeedObject>(true) == null;
-            if (setup != null && (!setup.HasSceneContent || needsSortingArea))
+            bool needsStep2Cameras = setup != null &&
+                setup.GetComponentInChildren<WorkstationCameraController>(true) == null;
+            if (setup != null &&
+                (!setup.HasSceneContent ||
+                 needsSortingArea ||
+                 needsStep2Cameras ||
+                 setup.NeedsGeneratedContentUpgrade))
             {
                 Build(setup, false);
             }
