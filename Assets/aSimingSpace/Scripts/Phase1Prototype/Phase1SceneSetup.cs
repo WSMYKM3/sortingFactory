@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.Splines;
 using Unity.Mathematics;
 using SortingFactory.Step2;
+using SortingFactory.Step4;
 
 namespace SortingFactory.Phase1
 {
@@ -271,6 +272,7 @@ namespace SortingFactory.Phase1
                 720,
                 10f,
                 85);
+            cameraMount.gameObject.AddComponent<WorkstationPickDecisionController>();
 
             Transform dropZone = new GameObject($"DropZone_{index + 1}").transform;
             dropZone.SetParent(stationObject.transform, false);

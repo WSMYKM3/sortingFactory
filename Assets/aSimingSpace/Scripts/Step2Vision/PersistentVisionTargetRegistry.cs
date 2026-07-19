@@ -468,9 +468,30 @@ namespace SortingFactory.Step2
                 return false;
             }
 
-            lockedLogicalId = best.LogicalId;
-            best.IsLocked = true;
-            lockedTarget = best;
+            return TryLockTarget(best.LogicalId, out lockedTarget);
+        }
+
+        public bool TryLockTarget(int logicalId, out PersistentVisionTarget lockedTarget)
+        {
+            PersistentVisionTarget existingLock = LockedTarget;
+            if (existingLock != null)
+            {
+                lockedTarget = existingLock;
+                return existingLock.LogicalId == logicalId;
+            }
+
+            PersistentVisionTarget target = targets.Find(candidate =>
+                candidate.LogicalId == logicalId &&
+                candidate.State == PersistentVisionTargetState.Confirmed);
+            if (target == null)
+            {
+                lockedTarget = null;
+                return false;
+            }
+
+            lockedLogicalId = target.LogicalId;
+            target.IsLocked = true;
+            lockedTarget = target;
             return true;
         }
 
@@ -560,7 +581,8 @@ namespace SortingFactory.Step2
                 PersistentVisionTarget target = targets[index];
                 if (target.State != PersistentVisionTargetState.Lost ||
                     target.LostAt < 0d ||
-                    now - target.LostAt <= LostRetentionSeconds)
+                    now - target.LostAt <= LostRetentionSeconds ||
+                    target.LogicalId == lockedLogicalId)
                 {
                     continue;
                 }

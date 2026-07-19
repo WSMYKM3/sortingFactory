@@ -1,5 +1,6 @@
 using System;
 using SortingFactory.Phase1;
+using SortingFactory.Step4;
 using UnityEngine;
 
 namespace SortingFactory.Step2
@@ -7,9 +8,9 @@ namespace SortingFactory.Step2
     public sealed class Step2CameraDebugPanel : MonoBehaviour
     {
         private const float PanelWidth = 500f;
-        private const float PanelHeight = 548f;
-        private const float DetectionPanelWidth = 340f;
-        private const float DetectionPanelHeight = 548f;
+        private const float PanelHeight = 604f;
+        private const float DetectionPanelWidth = 380f;
+        private const float DetectionPanelHeight = 604f;
         private const float PanelGap = 12f;
 
         private WorkstationCameraController[] cameras = Array.Empty<WorkstationCameraController>();
@@ -49,7 +50,7 @@ namespace SortingFactory.Step2
 
             Rect panel = new Rect(16f, 16f, PanelWidth, PanelHeight);
             GUI.Box(panel, GUIContent.none);
-            GUI.Label(new Rect(32f, 28f, 300f, 24f), "STEP 3  YOLO + BYTETRACK");
+            GUI.Label(new Rect(32f, 28f, 360f, 24f), "STEP 4  PICK WINDOW DECISION");
 
             if (SelectedCamera == null)
             {
@@ -106,6 +107,7 @@ namespace SortingFactory.Step2
                     $"{camera.LastInferenceMilliseconds:0} ms";
             GUI.Label(new Rect(32f, 440f, 450f, 20f), visionInfo);
             GUI.Label(new Rect(32f, 462f, 450f, 20f), camera.Status);
+            DrawStep4Status(camera);
             DrawConveyorSpeedControl();
 
             DrawDetectionPanel(new Rect(
@@ -119,28 +121,55 @@ namespace SortingFactory.Step2
 
         private void DrawConveyorSpeedControl()
         {
-            GUI.Label(new Rect(32f, 490f, 170f, 22f), "CONVEYOR OBJECT SPEED");
+            GUI.Label(new Rect(32f, 546f, 170f, 22f), "CONVEYOR OBJECT SPEED");
             if (phase1SceneSetup == null)
             {
-                GUI.Label(new Rect(210f, 490f, 272f, 22f), "Phase1SceneSetup unavailable");
+                GUI.Label(new Rect(210f, 546f, 272f, 22f), "Phase1SceneSetup unavailable");
                 return;
             }
 
             float currentSpeed = phase1SceneSetup.ConveyorObjectSpeed;
             float requestedSpeed = GUI.HorizontalSlider(
-                new Rect(206f, 495f, 210f, 20f),
+                new Rect(206f, 551f, 210f, 20f),
                 currentSpeed,
                 0.1f,
                 2f);
             requestedSpeed = Mathf.Round(requestedSpeed * 20f) / 20f;
-            GUI.Label(new Rect(428f, 490f, 54f, 22f), $"{currentSpeed:0.00}");
-            GUI.Label(new Rect(206f, 516f, 80f, 18f), "0.10 u/s");
-            GUI.Label(new Rect(362f, 516f, 54f, 18f), "2.00 u/s");
+            GUI.Label(new Rect(428f, 546f, 54f, 22f), $"{currentSpeed:0.00}");
+            GUI.Label(new Rect(206f, 572f, 80f, 18f), "0.10 u/s");
+            GUI.Label(new Rect(362f, 572f, 54f, 18f), "2.00 u/s");
 
             if (!Mathf.Approximately(requestedSpeed, currentSpeed))
             {
                 phase1SceneSetup.SetConveyorObjectSpeed(requestedSpeed);
             }
+        }
+
+        private static void DrawStep4Status(WorkstationCameraController camera)
+        {
+            WorkstationPickDecisionController decisionController =
+                camera.GetComponent<WorkstationPickDecisionController>();
+            if (decisionController == null || !decisionController.HasPhysicalPickWindow)
+            {
+                GUI.Label(new Rect(32f, 484f, 450f, 20f), "Step 4: building physical pick window");
+                GUI.Label(new Rect(32f, 506f, 450f, 20f), "Latest Pick Line unavailable");
+                return;
+            }
+
+            GUI.Label(
+                new Rect(32f, 484f, 450f, 20f),
+                $"Arm {ArmStateLabel(decisionController.ArmState)} | " +
+                    $"Required {decisionController.RequiredDecisionTime:0.0}s | " +
+                    $"Cycle {decisionController.CompleteCycleTime:0.0}s");
+            PickTargetEvaluation active = decisionController.ActiveEvaluation;
+            string activeStatus = active == null
+                ? "No locked target"
+                : $"Locked L#{active.LogicalTargetId} {active.ClassName} | " +
+                    $"{DecisionLabel(active.Decision)}";
+            GUI.Label(
+                new Rect(32f, 506f, 450f, 20f),
+                $"{decisionController.WorkspaceSpan:0.00}u | " +
+                    $"{decisionController.MotionStatus} | {activeStatus}");
         }
 
         private void SelectCamera(int index)
@@ -181,7 +210,7 @@ namespace SortingFactory.Step2
             GUI.Box(panel, GUIContent.none);
             GUI.Label(
                 new Rect(panel.x + 16f, panel.y + 12f, panel.width - 32f, 24f),
-                "PERSISTENT TARGETS");
+                "TARGETS + PICK DECISIONS");
 
             Rect viewport = new Rect(
                 panel.x + 10f,
@@ -199,10 +228,15 @@ namespace SortingFactory.Step2
             for (int cameraIndex = 0; cameraIndex < cameras.Length; cameraIndex++)
             {
                 WorkstationCameraController camera = cameras[cameraIndex];
+                WorkstationPickDecisionController decisionController =
+                    camera.GetComponent<WorkstationPickDecisionController>();
                 string status = camera.IsStreaming ? "LIVE" : "OFF";
+                string armState = decisionController == null
+                    ? "WAITING"
+                    : ArmStateLabel(decisionController.ArmState);
                 GUI.Label(
                     new Rect(6f, y, content.width - 12f, 22f),
-                    $"ARM {cameraIndex + 1}   {status}");
+                    $"ARM {cameraIndex + 1}   {status}   {armState}");
                 y += 24f;
 
                 if (!camera.IsStreaming)
@@ -242,7 +276,19 @@ namespace SortingFactory.Step2
                         GUI.Label(
                             new Rect(22f, y, content.width - 28f, 20f),
                             $"{path} | ID changes {target.TrackIdSwitches}");
-                        y += 22f;
+                        y += 19f;
+                        PickTargetEvaluation evaluation = decisionController == null
+                            ? null
+                            : decisionController.GetEvaluation(target.LogicalId);
+                        string decision = evaluation == null
+                            ? "pick: waiting for Step 4 evaluation"
+                            : $"pick: {FormatRemainingTime(evaluation.RemainingTime)} / " +
+                                $"{evaluation.RequiredTime:0.0}s | " +
+                                $"{DecisionLabel(evaluation.Decision)} | {evaluation.Reason}";
+                        GUI.Label(
+                            new Rect(22f, y, content.width - 28f, 20f),
+                            decision);
+                        y += 23f;
                     }
                 }
 
@@ -260,7 +306,7 @@ namespace SortingFactory.Step2
             {
                 int targetRows = Mathf.Max(1, camera.PersistentTargets.Length);
                 int resultRows = camera.IsStreaming
-                    ? targetRows * 3
+                    ? targetRows * 4
                     : 1;
                 height += 24f + resultRows * 20f + 14f;
             }
@@ -317,6 +363,10 @@ namespace SortingFactory.Step2
                 DrawOutline(roiRect, new Color(0.2f, 1f, 0.55f, 0.9f), 2f);
             }
 
+            WorkstationPickDecisionController decisionController =
+                camera.GetComponent<WorkstationPickDecisionController>();
+            DrawLatestPickLine(previewRect, camera, decisionController);
+
             foreach (VisionDetectionResult detection in camera.DisplayDetections)
             {
                 Rect detectionRect = NormalizedToGuiRect(
@@ -343,11 +393,22 @@ namespace SortingFactory.Step2
                     ? $"L#{detection.track_id} "
                     : string.Empty;
                 string stateLabel = DetectionStateLabel(detection.tracking_status);
+                PickTargetEvaluation evaluation = decisionController == null
+                    ? null
+                    : decisionController.GetEvaluation(detection.track_id);
+                string pickLabel = evaluation == null
+                    ? string.Empty
+                    : $" | {FormatRemainingTime(evaluation.RemainingTime)} " +
+                        DecisionShortLabel(evaluation.Decision);
                 string label = $"{trackLabel}{detection.class_name} " +
-                    $"{detection.confidence:P0}{stateLabel}";
-                float labelWidth = Mathf.Clamp(label.Length * 7.2f + 10f, 90f, detectionRect.width);
-                Rect labelRect = new Rect(
+                    $"{detection.confidence:P0}{stateLabel}{pickLabel}";
+                float labelWidth = Mathf.Clamp(label.Length * 7.2f + 10f, 110f, 245f);
+                float labelX = Mathf.Clamp(
                     detectionRect.x,
+                    previewRect.x,
+                    previewRect.xMax - labelWidth);
+                Rect labelRect = new Rect(
+                    labelX,
                     Mathf.Max(previewRect.y, detectionRect.y - 20f),
                     labelWidth,
                     20f);
@@ -358,6 +419,82 @@ namespace SortingFactory.Step2
                 GUI.Label(new Rect(labelRect.x + 4f, labelRect.y, labelRect.width - 6f, 20f), label);
                 GUI.color = previousColor;
             }
+        }
+
+        private static void DrawLatestPickLine(
+            Rect previewRect,
+            WorkstationCameraController cameraController,
+            WorkstationPickDecisionController decisionController)
+        {
+            if (decisionController == null || !decisionController.HasPhysicalPickWindow)
+            {
+                return;
+            }
+
+            Camera camera = cameraController.GetComponent<Camera>();
+            if (camera == null)
+            {
+                return;
+            }
+
+            Vector3 startViewport = camera.WorldToViewportPoint(
+                decisionController.LatestPickLineStartWorld);
+            Vector3 endViewport = camera.WorldToViewportPoint(
+                decisionController.LatestPickLineEndWorld);
+            if (startViewport.z <= 0f || endViewport.z <= 0f)
+            {
+                return;
+            }
+
+            Vector2 start = ViewportToGuiPoint(previewRect, startViewport);
+            Vector2 end = ViewportToGuiPoint(previewRect, endViewport);
+            Color lineColor = new Color(1f, 0.18f, 0.12f, 0.95f);
+            DrawGuiLine(start, end, lineColor, 3f);
+
+            Vector2 midpoint = (start + end) * 0.5f;
+            const float labelWidth = 126f;
+            Rect labelRect = new Rect(
+                Mathf.Clamp(midpoint.x - labelWidth * 0.5f, previewRect.x, previewRect.xMax - labelWidth),
+                Mathf.Clamp(midpoint.y - 24f, previewRect.y, previewRect.yMax - 18f),
+                labelWidth,
+                18f);
+            Color previousColor = GUI.color;
+            GUI.color = lineColor;
+            GUI.Box(labelRect, GUIContent.none);
+            GUI.color = Color.white;
+            GUI.Label(
+                new Rect(labelRect.x + 4f, labelRect.y, labelRect.width - 8f, 18f),
+                "LATEST PICK LINE");
+            GUI.color = previousColor;
+        }
+
+        private static Vector2 ViewportToGuiPoint(Rect previewRect, Vector3 viewport)
+        {
+            return new Vector2(
+                previewRect.x + Mathf.Clamp01(viewport.x) * previewRect.width,
+                previewRect.y + (1f - Mathf.Clamp01(viewport.y)) * previewRect.height);
+        }
+
+        private static void DrawGuiLine(Vector2 start, Vector2 end, Color color, float thickness)
+        {
+            Vector2 difference = end - start;
+            float length = difference.magnitude;
+            if (length <= 0.01f)
+            {
+                return;
+            }
+
+            Matrix4x4 previousMatrix = GUI.matrix;
+            Color previousColor = GUI.color;
+            GUI.color = color;
+            GUIUtility.RotateAroundPivot(
+                Mathf.Atan2(difference.y, difference.x) * Mathf.Rad2Deg,
+                start);
+            GUI.DrawTexture(
+                new Rect(start.x, start.y - thickness * 0.5f, length, thickness),
+                Texture2D.whiteTexture);
+            GUI.matrix = previousMatrix;
+            GUI.color = previousColor;
         }
 
         private static Rect NormalizedToGuiRect(
@@ -397,6 +534,42 @@ namespace SortingFactory.Step2
                 default:
                     return string.Empty;
             }
+        }
+
+        private static string ArmStateLabel(WorkstationArmState state)
+        {
+            switch (state)
+            {
+                case WorkstationArmState.SecuringObject:
+                    return "SECURING";
+                case WorkstationArmState.CompletingCycle:
+                    return "BUSY";
+                default:
+                    return "IDLE";
+            }
+        }
+
+        private static string DecisionLabel(PickDecision decision)
+        {
+            return decision.ToString().ToUpperInvariant();
+        }
+
+        private static string DecisionShortLabel(PickDecision decision)
+        {
+            switch (decision)
+            {
+                case PickDecision.Execute:
+                    return "EXEC";
+                case PickDecision.Completed:
+                    return "DONE";
+                default:
+                    return decision.ToString().ToUpperInvariant();
+            }
+        }
+
+        private static string FormatRemainingTime(float seconds)
+        {
+            return float.IsPositiveInfinity(seconds) ? "INF" : $"{seconds:0.0}s";
         }
 
         private static void DrawOutline(Rect rect, Color color, float thickness)

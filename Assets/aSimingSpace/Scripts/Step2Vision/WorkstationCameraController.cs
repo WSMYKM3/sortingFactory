@@ -144,6 +144,7 @@ namespace SortingFactory.Step2
             EnsurePersistentTracking();
             EnsureResources();
             ApplyCameraState();
+            EnsureStep4DecisionController();
         }
 
         private void OnValidate()
@@ -364,9 +365,24 @@ namespace SortingFactory.Step2
             return targetRegistry.TryLockBestTarget(out target);
         }
 
+        public bool TryLockTarget(int logicalId, out PersistentVisionTarget target)
+        {
+            EnsurePersistentTracking();
+            return targetRegistry.TryLockTarget(logicalId, out target);
+        }
+
         public void ReleaseLockedTarget()
         {
             targetRegistry?.ReleaseLockedTarget();
+        }
+
+        private void EnsureStep4DecisionController()
+        {
+            if (Application.isPlaying &&
+                GetComponent<SortingFactory.Step4.WorkstationPickDecisionController>() == null)
+            {
+                gameObject.AddComponent<SortingFactory.Step4.WorkstationPickDecisionController>();
+            }
         }
 
         private void EnsurePersistentTracking()
