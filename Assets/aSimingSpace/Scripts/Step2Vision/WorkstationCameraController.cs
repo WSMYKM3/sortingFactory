@@ -13,6 +13,8 @@ namespace SortingFactory.Step2
     [RequireComponent(typeof(Camera))]
     public sealed class WorkstationCameraController : MonoBehaviour
     {
+        private const int CurrentVisionFramingVersion = 4;
+
         [Header("Identity")]
         [SerializeField] private string robotArmId = "arm_1";
         [SerializeField] private string cameraId = "arm_1_camera";
@@ -29,6 +31,10 @@ namespace SortingFactory.Step2
 
         [Header("Vision Framing")]
         [SerializeField] private bool autoFrameWorkspace = true;
+        [SerializeField] private bool useOverheadCamera = true;
+        [SerializeField, Min(2f)] private float overheadHeightAboveBelt = 5f;
+        [SerializeField, Min(0f)] private float overheadSideOffsetAwayFromRobot;
+        [SerializeField] private float overheadAlongBeltOffset = -0.25f;
         [SerializeField, Min(0.5f)] private float cameraSideDistance = 3.65f;
         [SerializeField, Min(0.5f)] private float cameraHeightAboveBelt = 3.2f;
         [SerializeField] private float cameraAlongBeltOffset = -1.6f;
@@ -36,6 +42,7 @@ namespace SortingFactory.Step2
         [SerializeField] private float targetAlongBeltOffset = 0.45f;
         [SerializeField, Range(25f, 80f)] private float visionFieldOfView = 46f;
         [SerializeField, Range(0.6f, 1.2f)] private float cameraViewDistanceScale = 0.78f;
+        [SerializeField, HideInInspector] private int visionFramingVersion;
 
         [Header("Vision Server")]
         [SerializeField] private string serverUrl = "ws://127.0.0.1:8000/ws/camera";
@@ -131,6 +138,14 @@ namespace SortingFactory.Step2
             }
             EnsureResources();
             ApplyCameraState();
+        }
+
+        public void SetOverheadHeightAboveBelt(float height)
+        {
+            overheadHeightAboveBelt = Mathf.Max(2f, height);
+            overheadSideOffsetAwayFromRobot = 0f;
+            visionFramingVersion = CurrentVisionFramingVersion;
+            ApplyVisionFraming();
         }
 
         public void CaptureStill()
@@ -523,11 +538,13 @@ namespace SortingFactory.Step2
                 return null;
             }
 
-            float imageBottomY = Mathf.Clamp01(
-                detection.bbox_center_y + detection.bbox_height * 0.5f);
+            float imageProjectionY = useOverheadCamera
+                ? Mathf.Clamp01(detection.bbox_center_y)
+                : Mathf.Clamp01(
+                    detection.bbox_center_y + detection.bbox_height * 0.5f);
             Ray ray = stationCamera.ViewportPointToRay(new Vector3(
                 Mathf.Clamp01(detection.bbox_center_x),
-                1f - imageBottomY,
+                1f - imageProjectionY,
                 0f));
             Plane beltPlane = new Plane(Vector3.up, new Vector3(0f, workspace.bounds.min.y, 0f));
             if (!beltPlane.Raycast(ray, out float enter) || enter <= 0f)
@@ -659,6 +676,7 @@ namespace SortingFactory.Step2
 
         private void ApplyVisionFraming()
         {
+            UpgradeVisionFramingIfNeeded();
             if (!autoFrameWorkspace || stationCamera == null || workspace == null)
             {
                 return;
@@ -680,6 +698,25 @@ namespace SortingFactory.Step2
             }
 
             float beltSurfaceY = workspace.transform.localPosition.y - workspace.size.y * 0.5f;
+            if (useOverheadCamera)
+            {
+                Vector3 overheadCameraPosition = new Vector3(
+                    -robotSide * overheadSideOffsetAwayFromRobot,
+                    beltSurfaceY + overheadHeightAboveBelt,
+                    overheadAlongBeltOffset);
+                Vector3 overheadTargetPosition = new Vector3(
+                    0f,
+                    beltSurfaceY + 0.15f,
+                    targetAlongBeltOffset);
+                transform.localPosition = overheadCameraPosition;
+                transform.localRotation = Quaternion.LookRotation(
+                    overheadTargetPosition - overheadCameraPosition,
+                    Vector3.forward);
+                stationCamera.fieldOfView = visionFieldOfView;
+                HideWorkspaceVisualsFromCamera();
+                return;
+            }
+
             Vector3 baseCameraLocalPosition = new Vector3(
                 -robotSide * cameraSideDistance,
                 beltSurfaceY + cameraHeightAboveBelt,
@@ -699,6 +736,23 @@ namespace SortingFactory.Step2
                 Vector3.up);
             stationCamera.fieldOfView = visionFieldOfView;
 
+            HideWorkspaceVisualsFromCamera();
+        }
+
+        private void UpgradeVisionFramingIfNeeded()
+        {
+            if (visionFramingVersion >= CurrentVisionFramingVersion)
+            {
+                return;
+            }
+
+            overheadHeightAboveBelt = 5f;
+            overheadSideOffsetAwayFromRobot = 0f;
+            visionFramingVersion = CurrentVisionFramingVersion;
+        }
+
+        private void HideWorkspaceVisualsFromCamera()
+        {
             int workspaceVisualLayer = LayerMask.NameToLayer("Ignore Raycast");
             if (workspaceVisualLayer < 0)
             {
@@ -708,6 +762,17 @@ namespace SortingFactory.Step2
             foreach (Renderer workspaceRenderer in workspace.GetComponentsInChildren<Renderer>(true))
             {
                 workspaceRenderer.gameObject.layer = workspaceVisualLayer;
+            }
+
+            Transform station = transform.parent;
+            Transform robotMount = station == null ? null : station.Find("RobotMount");
+            if (robotMount != null)
+            {
+                foreach (Renderer robotRenderer in
+                    robotMount.GetComponentsInChildren<Renderer>(true))
+                {
+                    robotRenderer.gameObject.layer = workspaceVisualLayer;
+                }
             }
             stationCamera.cullingMask &= ~(1 << workspaceVisualLayer);
         }

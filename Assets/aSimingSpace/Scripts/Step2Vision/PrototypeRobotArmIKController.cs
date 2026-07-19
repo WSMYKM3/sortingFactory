@@ -15,6 +15,7 @@ namespace SortingFactory.Step4
             Approach,
             Descend,
             CloseGripper,
+            PlacementGesture,
             Lift,
             MoveToDrop,
             LowerToDrop,
@@ -23,16 +24,26 @@ namespace SortingFactory.Step4
         }
 
         [Header("IK Motion")]
-        [SerializeField, Min(10f)] private float jointRotationSpeed = 115f;
-        [SerializeField, Min(0.02f)] private float targetPositionTolerance = 0.14f;
-        [SerializeField, Min(0.1f)] private float approachHeight = 0.7f;
+        [SerializeField, Min(10f)] private float jointRotationSpeed = 90f;
+        [SerializeField, Min(0.02f)] private float targetPositionTolerance = 0.2f;
+        [SerializeField, Min(0.1f)] private float approachHeight = 0.55f;
         [SerializeField, Min(0f)] private float graspHeightOffset = 0.02f;
         [SerializeField, Min(0.1f)] private float liftHeight = 0.85f;
-        [SerializeField, Min(0.1f)] private float dropApproachHeight = 0.75f;
-        [SerializeField, Min(0.2f)] private float motionPhaseTimeout = 3.5f;
+        [SerializeField, Min(0.1f)] private float dropApproachHeight = 0.55f;
+        [SerializeField, Min(0.1f)] private float dropTargetTolerance = 0.45f;
+        [SerializeField, Min(0.1f)] private float maximumNaturalDropHeight = 0.22f;
+        [SerializeField, Min(0.2f)] private float motionPhaseTimeout = 4f;
+        [SerializeField] private bool allowAssistedPrototypeGrasp = true;
+        [SerializeField, Min(0.2f)] private float assistedAttachDistance = 1.2f;
+
+        [Header("Prototype Reliability")]
+        [SerializeField] private bool useReliableInstantPlacement = true;
+        [SerializeField, Min(0.1f)] private float placementGestureDuration = 0.65f;
+        [SerializeField, Min(0f)] private float placementGestureDistance = 0.45f;
+        [SerializeField, Min(0f)] private float placementGestureLift = 0.25f;
 
         [Header("Gripper")]
-        [SerializeField, Min(0.05f)] private float gripperCloseDuration = 0.4f;
+        [SerializeField, Min(0.05f)] private float gripperCloseDuration = 0.25f;
         [SerializeField, Range(0.1f, 1f)] private float closedFingerSpacingScale = 0.42f;
 
         private WorkstationPickDecisionController decisionController;
@@ -43,6 +54,7 @@ namespace SortingFactory.Step4
         private Transform elbowPivot;
         private Transform wristPivot;
         private Transform gripPoint;
+        private Transform objectHoldPoint;
         private Transform leftFinger;
         private Transform rightFinger;
         private Vector3 leftFingerOpenPosition;
@@ -61,7 +73,9 @@ namespace SortingFactory.Step4
         private Transform originalTargetParent;
         private Rigidbody heldBody;
         private bool heldBodyDetectedCollisions;
+        private Vector3 placementGestureTarget;
         private Vector3 liftTarget;
+        private float dropTransportHeight;
         private MotionPhase phase = MotionPhase.Idle;
         private bool configured;
         private bool rigBuilt;
@@ -78,6 +92,15 @@ namespace SortingFactory.Step4
             cameraController = newCameraController;
             workstation = newWorkstation;
             configured = decisionController != null && cameraController != null && workstation != null;
+            jointRotationSpeed = 90f;
+            motionPhaseTimeout = 4f;
+            dropApproachHeight = 0.55f;
+            dropTargetTolerance = 0.45f;
+            maximumNaturalDropHeight = 0.22f;
+            useReliableInstantPlacement = true;
+            placementGestureDuration = 0.65f;
+            placementGestureDistance = 0.45f;
+            placementGestureLift = 0.25f;
 
             if (!configured || !BuildRigHierarchy())
             {
@@ -115,6 +138,9 @@ namespace SortingFactory.Step4
                 case MotionPhase.CloseGripper:
                     UpdateCloseGripper(deltaTime);
                     break;
+                case MotionPhase.PlacementGesture:
+                    UpdatePlacementGesture(deltaTime);
+                    break;
                 case MotionPhase.Lift:
                     UpdateLift(deltaTime);
                     break;
@@ -131,6 +157,8 @@ namespace SortingFactory.Step4
                     UpdateReturnHome(deltaTime);
                     break;
             }
+
+            StabilizeHeldObject();
         }
 
         private void UpdateIdle()
@@ -166,7 +194,7 @@ namespace SortingFactory.Step4
 
             if (resolveElapsed >= 1.25f)
             {
-                FailCurrentTask("No physical object matched the detected target");
+                FailCurrentTask("No pickable object matched the detection");
             }
         }
 
@@ -186,7 +214,15 @@ namespace SortingFactory.Step4
             }
             else if (phaseElapsed > motionPhaseTimeout)
             {
-                FailCurrentTask("IK could not reach the approach position");
+                float distance = Vector3.Distance(gripPoint.position, target);
+                if (allowAssistedPrototypeGrasp && distance <= assistedAttachDistance + approachHeight)
+                {
+                    SetPhase(MotionPhase.Descend, "Approach limit reached; assisted descent");
+                }
+                else
+                {
+                    FailCurrentTask("IK could not reach the approach position");
+                }
             }
         }
 
@@ -200,13 +236,21 @@ namespace SortingFactory.Step4
 
             Vector3 target = center + Vector3.up * graspHeightOffset;
             SolveIkTowards(target, deltaTime);
-            if (Vector3.Distance(gripPoint.position, target) <= targetPositionTolerance)
+            float distance = Vector3.Distance(gripPoint.position, target);
+            if (distance <= targetPositionTolerance)
             {
                 SetPhase(MotionPhase.CloseGripper, "Closing gripper");
             }
             else if (phaseElapsed > motionPhaseTimeout)
             {
-                FailCurrentTask("IK could not reach the grasp position");
+                if (allowAssistedPrototypeGrasp && distance <= assistedAttachDistance)
+                {
+                    SetPhase(MotionPhase.CloseGripper, "Grasp limit reached; assisted alignment");
+                }
+                else
+                {
+                    FailCurrentTask("IK could not reach the grasp position");
+                }
             }
         }
 
@@ -228,9 +272,61 @@ namespace SortingFactory.Step4
                 return;
             }
 
+            if (useReliableInstantPlacement)
+            {
+                placementGestureTarget = BuildPlacementGestureTarget();
+                SetPhase(
+                    MotionPhase.PlacementGesture,
+                    $"Carrying {physicalTarget.name} toward drop zone");
+                return;
+            }
+
             decisionController.ReportGraspSucceeded();
             liftTarget = gripPoint.position + Vector3.up * liftHeight;
+            dropTransportHeight = liftTarget.y;
             SetPhase(MotionPhase.Lift, $"Lifting {physicalTarget.name}");
+        }
+
+        private void UpdatePlacementGesture(float deltaTime)
+        {
+            SolveIkTowards(placementGestureTarget, deltaTime);
+            if (phaseElapsed < placementGestureDuration)
+            {
+                return;
+            }
+
+            string placedObjectName = physicalTarget == null
+                ? "object"
+                : physicalTarget.name;
+            if (!PlacePhysicalTargetInDropZoneImmediately())
+            {
+                ReleasePhysicalTarget();
+                FailCurrentTask("Could not place the attached object in the drop zone");
+                return;
+            }
+
+            decisionController.ReportGraspSucceeded();
+            SetGripperBlend(0f);
+            SetPhase(
+                MotionPhase.ReturnHome,
+                $"Placed {placedObjectName}; returning robot home");
+        }
+
+        private Vector3 BuildPlacementGestureTarget()
+        {
+            Vector3 direction = workstation.DropZone == null
+                ? transform.forward
+                : workstation.DropZone.position - gripPoint.position;
+            direction.y = 0f;
+            if (direction.sqrMagnitude <= 0.0001f)
+            {
+                direction = transform.forward;
+                direction.y = 0f;
+            }
+
+            return gripPoint.position +
+                direction.normalized * placementGestureDistance +
+                Vector3.up * placementGestureLift;
         }
 
         private void UpdateLift(float deltaTime)
@@ -238,25 +334,28 @@ namespace SortingFactory.Step4
             SolveIkTowards(liftTarget, deltaTime);
             if (Vector3.Distance(gripPoint.position, liftTarget) <= targetPositionTolerance)
             {
-                SetPhase(MotionPhase.MoveToDrop, "Moving to drop zone");
+                SetPhase(MotionPhase.MoveToDrop, "Swinging above drop zone");
             }
             else if (phaseElapsed > motionPhaseTimeout)
             {
-                SetPhase(MotionPhase.MoveToDrop, "Lift limit reached; moving to drop zone");
+                dropTransportHeight = Mathf.Max(dropTransportHeight, gripPoint.position.y);
+                SetPhase(MotionPhase.MoveToDrop, "Lift limit reached; swinging above drop zone");
             }
         }
 
         private void UpdateMoveToDrop(float deltaTime)
         {
-            Vector3 target = GetDropPoint() + Vector3.up * dropApproachHeight;
+            Vector3 dropPoint = GetDropPoint();
+            Vector3 target = new Vector3(
+                dropPoint.x,
+                Mathf.Max(dropPoint.y + dropApproachHeight, dropTransportHeight),
+                dropPoint.z);
             SolveIkTowards(target, deltaTime);
-            if (Vector3.Distance(gripPoint.position, target) <= targetPositionTolerance)
+            if (IsHeldObjectHorizontallyInsideDropZone() &&
+                (Vector3.Distance(gripPoint.position, target) <= dropTargetTolerance ||
+                    phaseElapsed >= motionPhaseTimeout))
             {
-                SetPhase(MotionPhase.LowerToDrop, "Lowering object into drop zone");
-            }
-            else if (phaseElapsed > motionPhaseTimeout)
-            {
-                SetPhase(MotionPhase.LowerToDrop, "Drop approach limit reached");
+                SetPhase(MotionPhase.LowerToDrop, "Above drop zone; lowering object");
             }
         }
 
@@ -264,8 +363,9 @@ namespace SortingFactory.Step4
         {
             Vector3 target = GetDropPoint();
             SolveIkTowards(target, deltaTime);
-            if (Vector3.Distance(gripPoint.position, target) <= targetPositionTolerance ||
-                phaseElapsed > motionPhaseTimeout)
+            if (CanReleaseNaturallyIntoDropZone() ||
+                (phaseElapsed >= motionPhaseTimeout &&
+                    IsHeldObjectHorizontallyInsideDropZone()))
             {
                 SetPhase(MotionPhase.OpenGripper, "Releasing object");
             }
@@ -383,10 +483,20 @@ namespace SortingFactory.Step4
                 elbowPivot = shoulderPivot == null ? null : shoulderPivot.Find("IK_Elbow");
                 wristPivot = elbowPivot == null ? null : elbowPivot.Find("IK_Wrist");
                 gripPoint = wristPivot == null ? null : wristPivot.Find("GripPoint");
+                objectHoldPoint = gripPoint == null ? null : gripPoint.Find("ObjectHoldPoint");
+                if (gripPoint != null && objectHoldPoint == null)
+                {
+                    objectHoldPoint = CreatePivot(
+                        "ObjectHoldPoint",
+                        gripPoint,
+                        gripPoint.position,
+                        Quaternion.identity);
+                }
                 leftFinger = FindDescendant(transform, "GripperLeft");
                 rightFinger = FindDescendant(transform, "GripperRight");
                 rigBuilt = shoulderPivot != null && elbowPivot != null && wristPivot != null &&
-                    gripPoint != null && leftFinger != null && rightFinger != null;
+                    gripPoint != null && objectHoldPoint != null &&
+                    leftFinger != null && rightFinger != null;
                 if (rigBuilt)
                 {
                     CacheFingerPositions();
@@ -441,6 +551,11 @@ namespace SortingFactory.Step4
             rightFinger.SetParent(wristPivot, true);
 
             gripPoint = CreatePivot("GripPoint", wristPivot, gripPosition, transform.rotation);
+            objectHoldPoint = CreatePivot(
+                "ObjectHoldPoint",
+                gripPoint,
+                gripPosition,
+                Quaternion.identity);
             CacheFingerPositions();
             rigBuilt = true;
             return true;
@@ -477,8 +592,20 @@ namespace SortingFactory.Step4
             VisionDetectionResult displayDetection = Array.Find(
                 cameraController.DisplayDetections,
                 detection => detection.track_id == logicalTargetId);
+            if (displayDetection == null && visionTarget != null)
+            {
+                displayDetection = visionTarget.BuildDisplayDetection(1.5f);
+            }
             if (stationCamera != null && displayDetection != null)
             {
+                Transform screenMatchedTarget = ResolveConveyorTargetByScreenPosition(
+                    stationCamera,
+                    displayDetection);
+                if (screenMatchedTarget != null)
+                {
+                    return screenMatchedTarget;
+                }
+
                 Ray ray = stationCamera.ViewportPointToRay(new Vector3(
                     displayDetection.bbox_center_x,
                     1f - displayDetection.bbox_center_y,
@@ -492,7 +619,8 @@ namespace SortingFactory.Step4
                 foreach (RaycastHit hit in hits)
                 {
                     Transform candidate = GetPickableRoot(hit.collider);
-                    if (IsEligiblePhysicalTarget(candidate, visionTarget))
+                    if (IsKnownPickableTarget(candidate) &&
+                        IsEligiblePhysicalTarget(candidate, null))
                     {
                         return candidate;
                     }
@@ -506,10 +634,12 @@ namespace SortingFactory.Step4
 
             Rigidbody[] bodies = FindObjectsByType<Rigidbody>(FindObjectsSortMode.None);
             Transform closest = null;
-            float closestDistance = 1.25f;
+            float closestDistance = 2.5f;
             foreach (Rigidbody body in bodies)
             {
-                if (!IsEligiblePhysicalTarget(body.transform, visionTarget))
+                if (!IsKnownPickableTarget(body.transform) ||
+                    !IsEligiblePhysicalTarget(body.transform, visionTarget) ||
+                    !MatchesDetectedClassWhenKnown(body.transform, visionTarget.ClassName))
                 {
                     continue;
                 }
@@ -526,6 +656,106 @@ namespace SortingFactory.Step4
                 }
             }
             return closest;
+        }
+
+        private Transform ResolveConveyorTargetByScreenPosition(
+            Camera stationCamera,
+            VisionDetectionResult detection)
+        {
+            if (stationCamera == null || detection == null)
+            {
+                return null;
+            }
+
+            Vector2 detectionCenter = new Vector2(
+                detection.bbox_center_x,
+                1f - detection.bbox_center_y);
+            float maximumScreenDistance = Mathf.Clamp(
+                Mathf.Max(detection.bbox_width, detection.bbox_height) * 1.5f,
+                0.14f,
+                0.32f);
+            float bestScore = maximumScreenDistance;
+            Transform bestCandidate = null;
+
+            foreach (DetectionLabeledBox labeledBox in
+                FindObjectsByType<DetectionLabeledBox>(FindObjectsSortMode.None))
+            {
+                Transform candidate = labeledBox.transform;
+                if (!IsEligiblePhysicalTarget(candidate, null) ||
+                    !TryGetRendererBounds(candidate, out Bounds bounds))
+                {
+                    continue;
+                }
+
+                Vector3 viewportPosition = stationCamera.WorldToViewportPoint(bounds.center);
+                if (viewportPosition.z <= 0f)
+                {
+                    continue;
+                }
+
+                float score = Vector2.Distance(
+                    detectionCenter,
+                    new Vector2(viewportPosition.x, viewportPosition.y));
+                if (!labeledBox.MatchesVisionClass(detection.class_name))
+                {
+                    score += 0.08f;
+                }
+
+                if (score <= bestScore)
+                {
+                    bestScore = score;
+                    bestCandidate = candidate;
+                }
+            }
+
+            foreach (SplineConveyorObject conveyorObject in
+                FindObjectsByType<SplineConveyorObject>(FindObjectsSortMode.None))
+            {
+                Transform candidate = conveyorObject.transform;
+                if (!conveyorObject.IsFollowingConveyor ||
+                    candidate.GetComponent<DetectionLabeledBox>() != null ||
+                    !IsEligiblePhysicalTarget(candidate, null) ||
+                    !TryGetRendererBounds(candidate, out Bounds bounds))
+                {
+                    continue;
+                }
+
+                Vector3 viewportPosition = stationCamera.WorldToViewportPoint(bounds.center);
+                if (viewportPosition.z <= 0f)
+                {
+                    continue;
+                }
+
+                float screenDistance = Vector2.Distance(
+                    detectionCenter,
+                    new Vector2(viewportPosition.x, viewportPosition.y));
+                if (screenDistance <= bestScore)
+                {
+                    bestScore = screenDistance;
+                    bestCandidate = candidate;
+                }
+            }
+
+            return bestCandidate;
+        }
+
+        private static bool IsKnownPickableTarget(Transform candidate)
+        {
+            return candidate != null &&
+                (candidate.GetComponent<DetectionLabeledBox>() != null ||
+                    candidate.GetComponent<SplineConveyorObject>() != null ||
+                    candidate.GetComponent<SortingAreaFeedObject>() != null);
+        }
+
+        private static bool MatchesDetectedClassWhenKnown(
+            Transform candidate,
+            string detectedClass)
+        {
+            DetectionLabeledBox labeledBox = candidate == null
+                ? null
+                : candidate.GetComponent<DetectionLabeledBox>();
+            return labeledBox == null || string.IsNullOrEmpty(detectedClass) ||
+                labeledBox.MatchesVisionClass(detectedClass);
         }
 
         private Transform GetPickableRoot(Collider collider)
@@ -563,16 +793,15 @@ namespace SortingFactory.Step4
                 return false;
             }
 
-            Renderer[] renderers = candidate.GetComponentsInChildren<Renderer>();
-            if (renderers.Length == 0)
+            SplineConveyorObject conveyorObject = candidate.GetComponent<SplineConveyorObject>();
+            if (conveyorObject != null && !conveyorObject.IsFollowingConveyor)
             {
                 return false;
             }
 
-            Bounds bounds = renderers[0].bounds;
-            for (int index = 1; index < renderers.Length; index++)
+            if (!TryGetRendererBounds(candidate, out Bounds bounds))
             {
-                bounds.Encapsulate(renderers[index].bounds);
+                return false;
             }
             if (bounds.size.x > 2.5f || bounds.size.y > 2.5f || bounds.size.z > 2.5f)
             {
@@ -584,11 +813,35 @@ namespace SortingFactory.Step4
                 return true;
             }
 
+            if (conveyorObject == null || !conveyorObject.IsFollowingConveyor)
+            {
+                return false;
+            }
+
             Vector2 candidatePosition = new Vector2(bounds.center.x, bounds.center.z);
             Vector2 predictedPosition = new Vector2(
                 visionTarget.PredictedBeltPosition.x,
                 visionTarget.PredictedBeltPosition.z);
-            return Vector2.Distance(candidatePosition, predictedPosition) <= 1.5f;
+            return Vector2.Distance(candidatePosition, predictedPosition) <= 2f;
+        }
+
+        private static bool TryGetRendererBounds(Transform candidate, out Bounds bounds)
+        {
+            Renderer[] renderers = candidate == null
+                ? Array.Empty<Renderer>()
+                : candidate.GetComponentsInChildren<Renderer>();
+            if (renderers.Length == 0)
+            {
+                bounds = default;
+                return false;
+            }
+
+            bounds = renderers[0].bounds;
+            for (int index = 1; index < renderers.Length; index++)
+            {
+                bounds.Encapsulate(renderers[index].bounds);
+            }
+            return true;
         }
 
         private bool TryGetPhysicalTargetCenter(out Vector3 center)
@@ -599,26 +852,54 @@ namespace SortingFactory.Step4
                 return false;
             }
 
-            Renderer[] renderers = physicalTarget.GetComponentsInChildren<Renderer>();
-            if (renderers.Length == 0)
+            if (!TryGetPhysicalBounds(physicalTarget, out Bounds bounds))
             {
                 center = physicalTarget.position;
                 return true;
-            }
-
-            Bounds bounds = renderers[0].bounds;
-            for (int index = 1; index < renderers.Length; index++)
-            {
-                bounds.Encapsulate(renderers[index].bounds);
             }
             center = bounds.center;
             return true;
         }
 
+        private static bool TryGetPhysicalBounds(Transform candidate, out Bounds bounds)
+        {
+            Collider[] colliders = candidate == null
+                ? Array.Empty<Collider>()
+                : candidate.GetComponentsInChildren<Collider>();
+            bool hasBounds = false;
+            bounds = default;
+            foreach (Collider collider in colliders)
+            {
+                if (collider == null || !collider.enabled || collider.isTrigger)
+                {
+                    continue;
+                }
+
+                if (!hasBounds)
+                {
+                    bounds = collider.bounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(collider.bounds);
+                }
+            }
+
+            return hasBounds || TryGetRendererBounds(candidate, out bounds);
+        }
+
         private bool AttachPhysicalTarget()
         {
-            if (!TryGetPhysicalTargetCenter(out Vector3 center) ||
-                Vector3.Distance(center, gripPoint.position) > targetPositionTolerance * 2.5f)
+            if (!TryGetPhysicalTargetCenter(out Vector3 center))
+            {
+                return false;
+            }
+
+            float maximumAttachDistance = allowAssistedPrototypeGrasp
+                ? assistedAttachDistance
+                : targetPositionTolerance * 2.5f;
+            if (Vector3.Distance(center, gripPoint.position) > maximumAttachDistance)
             {
                 return false;
             }
@@ -644,14 +925,25 @@ namespace SortingFactory.Step4
             {
                 conveyorObject.SetConveyorMotionEnabled(false);
             }
+            SortingAreaFeedObject feedObject = physicalTarget.GetComponent<SortingAreaFeedObject>();
+            if (feedObject != null)
+            {
+                feedObject.enabled = false;
+            }
 
             heldBody.linearVelocity = Vector3.zero;
             heldBody.angularVelocity = Vector3.zero;
             heldBody.useGravity = false;
             heldBody.isKinematic = true;
             heldBody.detectCollisions = false;
-            physicalTarget.position += gripPoint.position - center;
-            physicalTarget.SetParent(gripPoint, true);
+            objectHoldPoint.rotation = Quaternion.identity;
+            physicalTarget.rotation = Quaternion.Euler(0f, physicalTarget.eulerAngles.y, 0f);
+            if (TryGetPhysicalTargetCenter(out Vector3 alignedCenter))
+            {
+                center = alignedCenter;
+            }
+            physicalTarget.position += objectHoldPoint.position - center;
+            physicalTarget.SetParent(objectHoldPoint, true);
             return true;
         }
 
@@ -671,12 +963,43 @@ namespace SortingFactory.Step4
                 heldBody.linearVelocity = Vector3.zero;
                 heldBody.angularVelocity = Vector3.zero;
             }
+        }
 
-            if (!TryGetPhysicalTargetCenter(out Vector3 center))
+        private bool PlacePhysicalTargetInDropZoneImmediately()
+        {
+            if (physicalTarget == null ||
+                !TryGetDropSurfaceBounds(out Bounds surfaceBounds))
+            {
+                return false;
+            }
+
+            physicalTarget.rotation = Quaternion.Euler(
+                0f,
+                physicalTarget.eulerAngles.y,
+                0f);
+            if (!TryGetPhysicalBounds(physicalTarget, out Bounds objectBounds))
+            {
+                return false;
+            }
+
+            Vector3 placementCenter = new Vector3(
+                surfaceBounds.center.x,
+                surfaceBounds.max.y + objectBounds.extents.y + 0.08f,
+                surfaceBounds.center.z);
+            physicalTarget.position += placementCenter - objectBounds.center;
+            ReleasePhysicalTarget();
+            return true;
+        }
+
+        private void StabilizeHeldObject()
+        {
+            if (objectHoldPoint == null || physicalTarget == null || heldBody == null ||
+                !heldBody.isKinematic)
             {
                 return;
             }
-            physicalTarget.position += GetDropPoint() - center;
+
+            objectHoldPoint.rotation = Quaternion.identity;
         }
 
         private Vector3 GetDropPoint()
@@ -686,22 +1009,80 @@ namespace SortingFactory.Step4
                 return transform.position + Vector3.up * 0.5f;
             }
 
-            Renderer[] renderers = workstation.DropZone.GetComponentsInChildren<Renderer>();
-            if (renderers.Length == 0)
+            Transform dropSurface = workstation.DropZone.Find("DropSurface");
+            Renderer surfaceRenderer = dropSurface == null
+                ? null
+                : dropSurface.GetComponent<Renderer>();
+            if (surfaceRenderer == null)
             {
                 return workstation.DropZone.position + Vector3.up * 0.25f;
             }
 
-            Bounds bounds = renderers[0].bounds;
-            for (int index = 1; index < renderers.Length; index++)
+            float objectHalfHeight = 0.2f;
+            if (TryGetPhysicalTargetCenter(out _) &&
+                TryGetPhysicalBounds(physicalTarget, out Bounds objectBounds))
             {
-                bounds.Encapsulate(renderers[index].bounds);
+                objectHalfHeight = Mathf.Max(0.1f, objectBounds.extents.y);
             }
-            return new Vector3(bounds.center.x, bounds.max.y + 0.2f, bounds.center.z);
+
+            Bounds surfaceBounds = surfaceRenderer.bounds;
+            return new Vector3(
+                surfaceBounds.center.x,
+                surfaceBounds.max.y + objectHalfHeight + 0.12f,
+                surfaceBounds.center.z);
+        }
+
+        private bool IsHeldObjectHorizontallyInsideDropZone()
+        {
+            if (!TryGetDropSurfaceBounds(out Bounds surfaceBounds) ||
+                !TryGetPhysicalBounds(physicalTarget, out Bounds objectBounds))
+            {
+                return false;
+            }
+
+            const float edgeClearance = 0.04f;
+            return objectBounds.min.x >= surfaceBounds.min.x + edgeClearance &&
+                objectBounds.max.x <= surfaceBounds.max.x - edgeClearance &&
+                objectBounds.min.z >= surfaceBounds.min.z + edgeClearance &&
+                objectBounds.max.z <= surfaceBounds.max.z - edgeClearance;
+        }
+
+        private bool CanReleaseNaturallyIntoDropZone()
+        {
+            if (!TryGetDropSurfaceBounds(out Bounds surfaceBounds) ||
+                !TryGetPhysicalBounds(physicalTarget, out Bounds objectBounds))
+            {
+                return false;
+            }
+
+            float dropHeight = objectBounds.min.y - surfaceBounds.max.y;
+            return IsHeldObjectHorizontallyInsideDropZone() &&
+                dropHeight >= -0.15f &&
+                dropHeight <= maximumNaturalDropHeight;
+        }
+
+        private bool TryGetDropSurfaceBounds(out Bounds bounds)
+        {
+            Transform dropSurface = workstation.DropZone == null
+                ? null
+                : workstation.DropZone.Find("DropSurface");
+            Renderer renderer = dropSurface == null ? null : dropSurface.GetComponent<Renderer>();
+            if (renderer == null)
+            {
+                bounds = default;
+                return false;
+            }
+
+            bounds = renderer.bounds;
+            return true;
         }
 
         private void FailCurrentTask(string reason)
         {
+            string targetName = physicalTarget == null ? "unresolved target" : physicalTarget.name;
+            Debug.LogWarning(
+                $"{workstation.ArmId} prototype grasp failed during {phase}: {reason} ({targetName}).",
+                this);
             decisionController.SetMotionStatus(reason);
             decisionController.ReportGraspFailed(reason);
             SetPhase(MotionPhase.ReturnHome, reason);

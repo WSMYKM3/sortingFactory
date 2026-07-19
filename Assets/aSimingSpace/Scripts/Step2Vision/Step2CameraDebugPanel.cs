@@ -8,9 +8,9 @@ namespace SortingFactory.Step2
     public sealed class Step2CameraDebugPanel : MonoBehaviour
     {
         private const float PanelWidth = 500f;
-        private const float PanelHeight = 604f;
+        private const float PanelHeight = 488f;
         private const float DetectionPanelWidth = 380f;
-        private const float DetectionPanelHeight = 604f;
+        private const float DetectionPanelHeight = 488f;
         private const float PanelGap = 12f;
 
         private WorkstationCameraController[] cameras = Array.Empty<WorkstationCameraController>();
@@ -96,18 +96,11 @@ namespace SortingFactory.Step2
                 SetAllStreams(!allStreaming);
             }
 
-            string connection = camera.IsConnected ? "connected" : "disconnected";
             GUI.Label(
                 new Rect(32f, 418f, 450f, 20f),
-                $"1280 x 720 | JPEG 85 | Server {connection} | Frames {camera.CapturedFrameCount}");
-            string visionInfo = string.IsNullOrEmpty(camera.ActiveModelName)
-                ? "Model waiting for first frame"
-                : $"{camera.ActiveModelName} | {camera.EffectiveServerFramesPerSecond:0.0} FPS | " +
-                    $"T {camera.TrackedDetectionCount} / P {camera.PredictedDetectionCount} | " +
-                    $"{camera.LastInferenceMilliseconds:0} ms";
-            GUI.Label(new Rect(32f, 440f, 450f, 20f), visionInfo);
-            GUI.Label(new Rect(32f, 462f, 450f, 20f), camera.Status);
-            DrawStep4Status(camera);
+                $"VISION {(camera.IsConnected ? "ONLINE" : "OFFLINE")} | " +
+                    $"Frames {camera.CapturedFrameCount}");
+            DrawCompactArmStatus(camera);
             DrawConveyorSpeedControl();
 
             DrawDetectionPanel(new Rect(
@@ -121,23 +114,21 @@ namespace SortingFactory.Step2
 
         private void DrawConveyorSpeedControl()
         {
-            GUI.Label(new Rect(32f, 546f, 170f, 22f), "CONVEYOR OBJECT SPEED");
+            GUI.Label(new Rect(32f, 466f, 150f, 22f), "CONVEYOR SPEED");
             if (phase1SceneSetup == null)
             {
-                GUI.Label(new Rect(210f, 546f, 272f, 22f), "Phase1SceneSetup unavailable");
+                GUI.Label(new Rect(190f, 466f, 292f, 22f), "Unavailable");
                 return;
             }
 
             float currentSpeed = phase1SceneSetup.ConveyorObjectSpeed;
             float requestedSpeed = GUI.HorizontalSlider(
-                new Rect(206f, 551f, 210f, 20f),
+                new Rect(190f, 471f, 226f, 20f),
                 currentSpeed,
                 0.1f,
                 2f);
             requestedSpeed = Mathf.Round(requestedSpeed * 20f) / 20f;
-            GUI.Label(new Rect(428f, 546f, 54f, 22f), $"{currentSpeed:0.00}");
-            GUI.Label(new Rect(206f, 572f, 80f, 18f), "0.10 u/s");
-            GUI.Label(new Rect(362f, 572f, 54f, 18f), "2.00 u/s");
+            GUI.Label(new Rect(428f, 466f, 54f, 22f), $"{currentSpeed:0.00}");
 
             if (!Mathf.Approximately(requestedSpeed, currentSpeed))
             {
@@ -145,31 +136,20 @@ namespace SortingFactory.Step2
             }
         }
 
-        private static void DrawStep4Status(WorkstationCameraController camera)
+        private static void DrawCompactArmStatus(WorkstationCameraController camera)
         {
             WorkstationPickDecisionController decisionController =
                 camera.GetComponent<WorkstationPickDecisionController>();
-            if (decisionController == null || !decisionController.HasPhysicalPickWindow)
-            {
-                GUI.Label(new Rect(32f, 484f, 450f, 20f), "Step 4: building physical pick window");
-                GUI.Label(new Rect(32f, 506f, 450f, 20f), "Latest Pick Line unavailable");
-                return;
-            }
-
-            GUI.Label(
-                new Rect(32f, 484f, 450f, 20f),
-                $"Arm {ArmStateLabel(decisionController.ArmState)} | " +
-                    $"Required {decisionController.RequiredDecisionTime:0.0}s | " +
-                    $"Cycle {decisionController.CompleteCycleTime:0.0}s");
-            PickTargetEvaluation active = decisionController.ActiveEvaluation;
-            string activeStatus = active == null
+            string armState = decisionController == null
+                ? "WAITING"
+                : ArmStateLabel(decisionController.ArmState);
+            PersistentVisionTarget lockedTarget = camera.LockedTarget;
+            string targetStatus = lockedTarget == null
                 ? "No locked target"
-                : $"Locked L#{active.LogicalTargetId} {active.ClassName} | " +
-                    $"{DecisionLabel(active.Decision)}";
+                : $"L#{lockedTarget.LogicalId} {lockedTarget.ClassName}";
             GUI.Label(
-                new Rect(32f, 506f, 450f, 20f),
-                $"{decisionController.WorkspaceSpan:0.00}u | " +
-                    $"{decisionController.MotionStatus} | {activeStatus}");
+                new Rect(32f, 442f, 450f, 20f),
+                $"ARM {armState} | {targetStatus}");
         }
 
         private void SelectCamera(int index)

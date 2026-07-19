@@ -45,9 +45,10 @@ namespace SortingFactory.Step4
     public sealed class WorkstationPickDecisionController : MonoBehaviour
     {
         [Header("Step 4 Timing")]
-        [SerializeField, Min(0.1f)] private float requiredGraspTimeSeconds = 2.5f;
-        [SerializeField, Min(0f)] private float safetyMarginSeconds = 0.5f;
+        [SerializeField, Min(0.1f)] private float requiredGraspTimeSeconds = 1.25f;
+        [SerializeField, Min(0f)] private float safetyMarginSeconds = 0.25f;
         [SerializeField, Min(0.1f)] private float completeCycleTimeSeconds = 10f;
+        [SerializeField] private bool useFastPrototypePickWindow = true;
 
         [Header("Decision Simulation")]
         [SerializeField] private bool automaticallyLockExecutableTargets = true;
@@ -110,12 +111,14 @@ namespace SortingFactory.Step4
 
         private void Awake()
         {
+            ApplyPrototypeTimingProfile();
             ResolveReferences();
             RebuildPhysicalPickWindow();
         }
 
         private void OnValidate()
         {
+            ApplyPrototypeTimingProfile();
             completeCycleTimeSeconds = Mathf.Max(
                 requiredGraspTimeSeconds,
                 completeCycleTimeSeconds);
@@ -123,6 +126,17 @@ namespace SortingFactory.Step4
             {
                 RebuildPhysicalPickWindow();
             }
+        }
+
+        private void ApplyPrototypeTimingProfile()
+        {
+            if (!useFastPrototypePickWindow)
+            {
+                return;
+            }
+
+            requiredGraspTimeSeconds = 1.25f;
+            safetyMarginSeconds = 0.25f;
         }
 
         private void Update()

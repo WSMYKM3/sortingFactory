@@ -23,7 +23,7 @@ namespace SortingFactory.Phase1
         [SerializeField] private Vector2 sortingAreaSize = new Vector2(8f, 6f);
         [SerializeField, Min(0.2f)] private float feederBeltWidth = 2.6f;
         [SerializeField, Range(0.2f, 1f)] private float initialObjectScale = 0.62f;
-        [SerializeField, Min(0.2f)] private float objectReleaseInterval = 1.35f;
+        [SerializeField, Min(0.2f)] private float objectReleaseInterval = DetectionBoxReleaseInterval;
         [SerializeField, Min(0f)] private float conveyorObjectSpeed = 0.5f;
         [SerializeField] private int randomSeed = 2026;
         [SerializeField] private GameObject[] objectPrefabs;
@@ -32,12 +32,16 @@ namespace SortingFactory.Phase1
         [SerializeField, HideInInspector] private Material[] objectMaterials;
         [SerializeField, HideInInspector] private Material guideMaterial;
         [SerializeField, HideInInspector] private Material feederBeltMaterial;
+        [SerializeField, HideInInspector] private string[] detectionObjectClasses;
+        [SerializeField, HideInInspector] private Material[] detectionLabelMaterials;
+        [SerializeField, HideInInspector] private Material detectionBoxBodyMaterial;
         [SerializeField, HideInInspector] private int generatedContentVersion;
 
         private SplineContainer mainConveyorPath;
 
         public const string SceneContentRootName = "Phase1 Scene Content";
         public const int CurrentGeneratedContentVersion = 2;
+        public const float DetectionBoxReleaseInterval = 2.4f;
 
         public GameObject RobotArmPrefab => robotArmPrefab;
         public float ConveyorObjectSpeed => conveyorObjectSpeed;
@@ -60,6 +64,11 @@ namespace SortingFactory.Phase1
         {
             mainConveyorPath = FindConveyorPath();
             ApplyConveyorObjectSpeed();
+
+            if (GetComponent<FactoryLightingController>() == null)
+            {
+                gameObject.AddComponent<FactoryLightingController>();
+            }
         }
 
         public void SetConveyorObjectSpeed(float speed)
@@ -86,6 +95,16 @@ namespace SortingFactory.Phase1
             feederBeltMaterial = newFeederBeltMaterial;
         }
 
+        public void ConfigureDetectionBoxes(
+            string[] classNames,
+            Material[] labelMaterials,
+            Material bodyMaterial)
+        {
+            detectionObjectClasses = classNames;
+            detectionLabelMaterials = labelMaterials;
+            detectionBoxBodyMaterial = bodyMaterial;
+        }
+
         public Transform BuildSceneContent()
         {
             RemoveExistingContent();
@@ -100,7 +119,10 @@ namespace SortingFactory.Phase1
 
             if (stationMaterials == null || stationMaterials.Length == 0 ||
                 objectMaterials == null || objectMaterials.Length == 0 ||
-                guideMaterial == null || feederBeltMaterial == null)
+                guideMaterial == null || feederBeltMaterial == null ||
+                detectionObjectClasses == null || detectionObjectClasses.Length == 0 ||
+                detectionLabelMaterials == null || detectionLabelMaterials.Length == 0 ||
+                detectionBoxBodyMaterial == null)
             {
                 Debug.LogError("Step 1 materials are missing. Use the Build Step 1 Scene button in the Inspector.", this);
                 return null;
@@ -276,7 +298,7 @@ namespace SortingFactory.Phase1
 
             Transform dropZone = new GameObject($"DropZone_{index + 1}").transform;
             dropZone.SetParent(stationObject.transform, false);
-            dropZone.localPosition = new Vector3(sideSign * dropZoneSideOffset, 0.06f, 0f);
+            dropZone.localPosition = new Vector3(sideSign * dropZoneSideOffset, 1.74f, 0f);
             PrototypeVisualFactory.CreateDropZone(dropZone, stationMaterial);
 
             station.SetReferences(workspaceTrigger, robotMount, cameraMount, dropZone);
@@ -405,7 +427,7 @@ namespace SortingFactory.Phase1
                     feedObject = item.AddComponent<SortingAreaFeedObject>();
                 }
 
-                float releaseDelay = i * objectReleaseInterval + Mathf.Lerp(0f, 0.35f, (float)random.NextDouble());
+                float releaseDelay = i * Mathf.Max(objectReleaseInterval, DetectionBoxReleaseInterval);
                 float feederHeight = beltSurfaceY + 0.08f - feederStartPosition.y;
                 Vector3 mainEntry = conveyorPath.EvaluatePosition(0f);
                 float mainHeight = beltSurfaceY + 0.08f - mainEntry.y;
@@ -445,7 +467,7 @@ namespace SortingFactory.Phase1
             Vector2[] positions = new Vector2[objectCount];
             float halfWidth = sortingAreaSize.x * 0.5f - 0.65f;
             float halfLength = sortingAreaSize.y * 0.5f - 0.65f;
-            const float minimumSpacing = 0.72f;
+            const float minimumSpacing = 1.05f;
 
             for (int i = 0; i < positions.Length; i++)
             {
@@ -480,6 +502,19 @@ namespace SortingFactory.Phase1
 
         private GameObject CreateInitialObject(int index, System.Random random)
         {
+            int detectionTypeCount = Mathf.Min(
+                detectionObjectClasses == null ? 0 : detectionObjectClasses.Length,
+                detectionLabelMaterials == null ? 0 : detectionLabelMaterials.Length);
+            if (detectionTypeCount > 0 && detectionBoxBodyMaterial != null)
+            {
+                int typeIndex = index % detectionTypeCount;
+                return DetectionLabeledBox.Create(
+                    detectionObjectClasses[typeIndex],
+                    detectionBoxBodyMaterial,
+                    detectionLabelMaterials[typeIndex],
+                    index + 1);
+            }
+
             if (objectPrefabs != null && objectPrefabs.Length > 0)
             {
                 GameObject prefab = objectPrefabs[random.Next(objectPrefabs.Length)];

@@ -64,7 +64,7 @@ namespace SortingFactory.Phase1
 
         public static void CreateDropZone(Transform parent, Material material)
         {
-            CreatePrimitive("DropSurface", PrimitiveType.Cube, parent, Vector3.zero, new Vector3(1.65f, 0.12f, 1.65f), material, false);
+            CreatePrimitive("DropSurface", PrimitiveType.Cube, parent, Vector3.zero, new Vector3(1.65f, 0.12f, 1.65f), material, true);
             CreateWireBox(parent, new Vector3(1.7f, 0.55f, 1.7f), material, 0.04f);
         }
 

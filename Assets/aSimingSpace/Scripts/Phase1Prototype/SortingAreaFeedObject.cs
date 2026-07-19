@@ -13,7 +13,9 @@ namespace SortingFactory.Phase1
         [SerializeField, Min(0f)] private float conveyorSpeed = 1f;
         [SerializeField] private float heightAboveFeeder;
         [SerializeField] private float heightAboveMainConveyor;
+        [SerializeField, Min(0.2f)] private float feederEntranceClearance = 1.15f;
 
+        private static SortingAreaFeedObject feederEntranceOwner;
         private Rigidbody body;
         private float elapsedTime;
         private float feederDistance;
@@ -50,6 +52,17 @@ namespace SortingFactory.Phase1
             conveyorSpeed = Mathf.Max(0f, speed);
         }
 
+        public void SetReleaseDelay(float delay)
+        {
+            releaseDelay = Mathf.Max(0f, delay);
+        }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetFeederEntranceReservation()
+        {
+            feederEntranceOwner = null;
+        }
+
         private void Awake()
         {
             PrepareRigidbody();
@@ -75,7 +88,7 @@ namespace SortingFactory.Phase1
             {
                 case FeedState.Waiting:
                     elapsedTime += Time.fixedDeltaTime;
-                    if (elapsedTime >= releaseDelay)
+                    if (elapsedTime >= releaseDelay && TryReserveFeederEntrance())
                     {
                         state = FeedState.ApproachingFeeder;
                     }
@@ -117,6 +130,11 @@ namespace SortingFactory.Phase1
             float feederLength = feederSpline.GetLength();
             feederDistance = Mathf.Min(feederDistance + conveyorSpeed * Time.fixedDeltaTime, feederLength);
 
+            if (feederEntranceOwner == this && feederDistance >= feederEntranceClearance)
+            {
+                ReleaseFeederEntrance();
+            }
+
             float normalizedPosition = SplineUtility.GetNormalizedInterpolation(
                 feederSpline,
                 feederDistance,
@@ -140,6 +158,7 @@ namespace SortingFactory.Phase1
 
         private void TransferToMainConveyor()
         {
+            ReleaseFeederEntrance();
             SplineConveyorObject mainConveyorObject = GetComponent<SplineConveyorObject>();
             if (mainConveyorObject == null)
             {
@@ -155,6 +174,30 @@ namespace SortingFactory.Phase1
             mainConveyorObject.SetConveyorMotionEnabled(true);
             state = FeedState.OnMainConveyor;
             enabled = false;
+        }
+
+        private bool TryReserveFeederEntrance()
+        {
+            if (feederEntranceOwner != null && feederEntranceOwner != this)
+            {
+                return false;
+            }
+
+            feederEntranceOwner = this;
+            return true;
+        }
+
+        private void ReleaseFeederEntrance()
+        {
+            if (feederEntranceOwner == this)
+            {
+                feederEntranceOwner = null;
+            }
+        }
+
+        private void OnDisable()
+        {
+            ReleaseFeederEntrance();
         }
 
         private void PrepareRigidbody()
