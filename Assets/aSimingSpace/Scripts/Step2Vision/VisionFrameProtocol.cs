@@ -11,7 +11,7 @@ namespace SortingFactory.Step2
     [Serializable]
     public sealed class VisionFrameMetadata
     {
-        public int protocol_version = 1;
+        public int protocol_version = 2;
         public string robot_arm_id;
         public string camera_id;
         public long frame_id;
@@ -19,11 +19,59 @@ namespace SortingFactory.Step2
         public int width;
         public int height;
         public string image_format = "jpeg";
+        public float roi_x_min;
+        public float roi_y_min;
+        public float roi_x_max = 1f;
+        public float roi_y_max = 1f;
+    }
+
+    [Serializable]
+    public sealed class VisionRoiResult
+    {
+        public float x_min;
+        public float y_min;
+        public float x_max = 1f;
+        public float y_max = 1f;
+    }
+
+    [Serializable]
+    public sealed class VisionDetectionResult
+    {
+        public int track_id = -1;
+        public int class_id;
+        public string class_name;
+        public float confidence;
+        public float bbox_center_x;
+        public float bbox_center_y;
+        public float bbox_width;
+        public float bbox_height;
+        public string tracking_status;
+        public float prediction_age_ms;
+    }
+
+    [Serializable]
+    public sealed class VisionFrameResponse
+    {
+        public int protocol_version;
+        public bool received;
+        public string error;
+        public string robot_arm_id;
+        public string camera_id;
+        public long frame_id;
+        public long server_received_at_unix_ms;
+        public string model_name;
+        public string tracker_name;
+        public float inference_ms;
+        public float effective_fps;
+        public int tracked_count;
+        public int predicted_count;
+        public VisionRoiResult roi;
+        public VisionDetectionResult[] detections;
     }
 
     public sealed class VisionFrameWebSocket : IDisposable
     {
-        private const int TimeoutMilliseconds = 2500;
+        private const int TimeoutMilliseconds = 15000;
 
         private readonly Uri serverUri;
         private readonly CancellationTokenSource lifetimeCancellation = new CancellationTokenSource();

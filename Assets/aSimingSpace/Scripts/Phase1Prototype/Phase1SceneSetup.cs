@@ -23,6 +23,7 @@ namespace SortingFactory.Phase1
         [SerializeField, Min(0.2f)] private float feederBeltWidth = 2.6f;
         [SerializeField, Range(0.2f, 1f)] private float initialObjectScale = 0.62f;
         [SerializeField, Min(0.2f)] private float objectReleaseInterval = 1.35f;
+        [SerializeField, Min(0f)] private float conveyorObjectSpeed = 0.5f;
         [SerializeField] private int randomSeed = 2026;
         [SerializeField] private GameObject[] objectPrefabs;
 
@@ -36,9 +37,27 @@ namespace SortingFactory.Phase1
         public const int CurrentGeneratedContentVersion = 2;
 
         public GameObject RobotArmPrefab => robotArmPrefab;
+        public float ConveyorObjectSpeed => conveyorObjectSpeed;
         public bool HasSceneContent => transform.Find(SceneContentRootName) != null;
         public bool NeedsGeneratedContentUpgrade =>
             generatedContentVersion < CurrentGeneratedContentVersion;
+
+        private void Awake()
+        {
+            ApplyConveyorObjectSpeed();
+        }
+
+        public void SetConveyorObjectSpeed(float speed)
+        {
+            float clampedSpeed = Mathf.Max(0f, speed);
+            if (Mathf.Approximately(conveyorObjectSpeed, clampedSpeed))
+            {
+                return;
+            }
+
+            conveyorObjectSpeed = clampedSpeed;
+            ApplyConveyorObjectSpeed();
+        }
 
         public void ConfigureGeneratedMaterials(
             Material[] newStationMaterials,
@@ -378,7 +397,29 @@ namespace SortingFactory.Phase1
                     conveyorPath,
                     releaseDelay,
                     feederHeight,
-                    mainHeight);
+                    mainHeight,
+                    conveyorObjectSpeed);
+            }
+        }
+
+        private void ApplyConveyorObjectSpeed()
+        {
+            foreach (SortingAreaFeedObject feedObject in
+                FindObjectsByType<SortingAreaFeedObject>(FindObjectsSortMode.None))
+            {
+                feedObject.SetConveyorSpeed(conveyorObjectSpeed);
+            }
+
+            foreach (SplineConveyorObject conveyorObject in
+                FindObjectsByType<SplineConveyorObject>(FindObjectsSortMode.None))
+            {
+                conveyorObject.SetConveyorSpeed(conveyorObjectSpeed);
+            }
+
+            foreach (ClosedLoopConveyorMover conveyorMover in
+                FindObjectsByType<ClosedLoopConveyorMover>(FindObjectsSortMode.None))
+            {
+                conveyorMover.SetConveyorSpeed(conveyorObjectSpeed);
             }
         }
 

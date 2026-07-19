@@ -45,6 +45,11 @@ namespace SortingFactory.Phase1
             PrepareRigidbody();
         }
 
+        public void SetConveyorSpeed(float speed)
+        {
+            conveyorSpeed = Mathf.Max(0f, speed);
+        }
+
         private void Awake()
         {
             PrepareRigidbody();

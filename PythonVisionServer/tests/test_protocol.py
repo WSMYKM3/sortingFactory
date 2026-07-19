@@ -6,7 +6,7 @@ from protocol import FrameProtocolError, decode_frame_packet, encode_frame_packe
 
 
 VALID_METADATA = {
-    "protocol_version": 1,
+    "protocol_version": 2,
     "robot_arm_id": "arm_1",
     "camera_id": "arm_1_camera",
     "frame_id": 42,
@@ -14,6 +14,10 @@ VALID_METADATA = {
     "width": 1280,
     "height": 720,
     "image_format": "jpeg",
+    "roi_x_min": 0.1,
+    "roi_y_min": 0.15,
+    "roi_x_max": 0.9,
+    "roi_y_max": 0.85,
 }
 FAKE_JPEG = b"\xff\xd8step-2-frame\xff\xd9"
 
@@ -38,6 +42,13 @@ class FrameProtocolTests(unittest.TestCase):
     def test_rejects_non_jpeg_payload(self) -> None:
         with self.assertRaisesRegex(FrameProtocolError, "JPEG"):
             decode_frame_packet(encode_frame_packet(VALID_METADATA, b"not-an-image"))
+
+    def test_rejects_invalid_roi(self) -> None:
+        metadata = dict(VALID_METADATA)
+        metadata["roi_x_min"] = 0.95
+
+        with self.assertRaisesRegex(FrameProtocolError, "ROI minimum"):
+            decode_frame_packet(encode_frame_packet(metadata, FAKE_JPEG))
 
     def test_rejects_header_length_larger_than_packet(self) -> None:
         header = json.dumps(VALID_METADATA).encode("utf-8")

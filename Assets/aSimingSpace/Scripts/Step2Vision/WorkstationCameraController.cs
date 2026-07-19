@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using UnityEngine;
@@ -23,8 +24,20 @@ namespace SortingFactory.Step2
         [SerializeField] private string captureFolder =
             "/Users/simon/Documents/WsmFiles/SortingFactoryScreenshots";
 
+        [Header("Vision Framing")]
+        [SerializeField] private bool autoFrameWorkspace = true;
+        [SerializeField, Min(0.5f)] private float cameraSideDistance = 3.65f;
+        [SerializeField, Min(0.5f)] private float cameraHeightAboveBelt = 3.2f;
+        [SerializeField] private float cameraAlongBeltOffset = -1.6f;
+        [SerializeField, Min(0f)] private float targetHeightAboveBelt = 0.55f;
+        [SerializeField] private float targetAlongBeltOffset = 0.45f;
+        [SerializeField, Range(25f, 80f)] private float visionFieldOfView = 46f;
+
         [Header("Vision Server")]
         [SerializeField] private string serverUrl = "ws://127.0.0.1:8000/ws/camera";
+
+        [Header("Overlay Smoothing")]
+        [SerializeField, Range(1f, 40f)] private float boundingBoxSmoothingSpeed = 14f;
 
         private RenderTexture cameraTexture;
         private VisionFrameWebSocket webSocket;
@@ -33,6 +46,8 @@ namespace SortingFactory.Step2
         private bool captureInProgress;
         private float nextStreamTime;
         private long frameId;
+        private readonly Dictionary<int, SmoothedDetectionState> smoothedDetections =
+            new Dictionary<int, SmoothedDetectionState>();
 
         public string RobotArmId => robotArmId;
         public string CameraId => cameraId;
@@ -43,6 +58,17 @@ namespace SortingFactory.Step2
         public bool IsCaptureInProgress => captureInProgress;
         public long CapturedFrameCount => frameId;
         public double LastRoundTripMilliseconds { get; private set; }
+        public float LastInferenceMilliseconds { get; private set; }
+        public float EffectiveServerFramesPerSecond { get; private set; }
+        public int TrackedDetectionCount { get; private set; }
+        public int PredictedDetectionCount { get; private set; }
+        public string ActiveModelName { get; private set; } = string.Empty;
+        public string ActiveTrackerName { get; private set; } = string.Empty;
+        public VisionRoiResult LatestRoi { get; private set; } = new VisionRoiResult();
+        public VisionDetectionResult[] LatestDetections { get; private set; } =
+            Array.Empty<VisionDetectionResult>();
+        public VisionDetectionResult[] DisplayDetections { get; private set; } =
+            Array.Empty<VisionDetectionResult>();
         public string LastCapturePath { get; private set; } = string.Empty;
         public string Status { get; private set; } = "Ready";
 
@@ -64,6 +90,7 @@ namespace SortingFactory.Step2
             captureHeight = height;
             streamFramesPerSecond = framesPerSecond;
             jpegQuality = quality;
+            ApplyVisionFraming();
         }
 
         public void SetPreviewEnabled(bool enabled)
@@ -78,6 +105,10 @@ namespace SortingFactory.Step2
             streaming = enabled;
             nextStreamTime = Time.unscaledTime;
             Status = enabled ? "Streaming requested" : "Stream stopped";
+            if (!enabled)
+            {
+                ClearDetections();
+            }
             EnsureResources();
             ApplyCameraState();
         }
@@ -89,12 +120,22 @@ namespace SortingFactory.Step2
 
         private void Awake()
         {
+            ApplyVisionFraming();
             EnsureResources();
             ApplyCameraState();
         }
 
+        private void OnValidate()
+        {
+            if (!Application.isPlaying)
+            {
+                ApplyVisionFraming();
+            }
+        }
+
         private void Update()
         {
+            UpdateSmoothedDetections();
             if (!streaming || captureInProgress || Time.unscaledTime < nextStreamTime)
             {
                 return;
@@ -177,6 +218,7 @@ namespace SortingFactory.Step2
             Destroy(readableTexture);
 
             frameId++;
+            VisionRoiResult workspaceRoi = CalculateWorkspaceRoi();
             VisionFrameMetadata metadata = new VisionFrameMetadata
             {
                 robot_arm_id = robotArmId,
@@ -184,7 +226,11 @@ namespace SortingFactory.Step2
                 frame_id = frameId,
                 captured_at_unix_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 width = captureWidth,
-                height = captureHeight
+                height = captureHeight,
+                roi_x_min = workspaceRoi.x_min,
+                roi_y_min = workspaceRoi.y_min,
+                roi_x_max = workspaceRoi.x_max,
+                roi_y_max = workspaceRoi.y_max
             };
 
             if (saveToDisk)
@@ -217,9 +263,7 @@ namespace SortingFactory.Step2
                 string acknowledgement = await webSocket.SendFrameAsync(metadata, jpegBytes);
                 timer.Stop();
                 LastRoundTripMilliseconds = timer.Elapsed.TotalMilliseconds;
-                Status = string.IsNullOrEmpty(acknowledgement)
-                    ? $"Frame {metadata.frame_id} acknowledged"
-                    : $"Frame {metadata.frame_id} acknowledged by server";
+                ApplyVisionResponse(acknowledgement, metadata);
             }
             catch (Exception exception)
             {
@@ -242,6 +286,231 @@ namespace SortingFactory.Step2
             string fileName = $"{cameraId}_{DateTime.Now:yyyyMMdd_HHmmss_fff}.jpg";
             LastCapturePath = Path.Combine(captureFolder, fileName);
             File.WriteAllBytes(LastCapturePath, jpegBytes);
+        }
+
+        private void ApplyVisionResponse(string json, VisionFrameMetadata sentMetadata)
+        {
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                throw new InvalidDataException("The vision server returned an empty response.");
+            }
+
+            VisionFrameResponse response = JsonUtility.FromJson<VisionFrameResponse>(json);
+            if (response == null || !response.received)
+            {
+                string reason = response == null || string.IsNullOrEmpty(response.error)
+                    ? "unknown server error"
+                    : response.error;
+                throw new InvalidDataException($"Vision frame rejected: {reason}");
+            }
+
+            if (response.protocol_version != 2 ||
+                response.robot_arm_id != sentMetadata.robot_arm_id ||
+                response.camera_id != sentMetadata.camera_id ||
+                response.frame_id != sentMetadata.frame_id)
+            {
+                throw new InvalidDataException("Vision response identity does not match the sent frame.");
+            }
+
+            LatestRoi = response.roi ?? new VisionRoiResult();
+            LatestDetections = response.detections ?? Array.Empty<VisionDetectionResult>();
+            LastInferenceMilliseconds = response.inference_ms;
+            EffectiveServerFramesPerSecond = response.effective_fps;
+            TrackedDetectionCount = response.tracked_count;
+            PredictedDetectionCount = response.predicted_count;
+            ActiveModelName = response.model_name ?? string.Empty;
+            ActiveTrackerName = response.tracker_name ?? string.Empty;
+            UpdateDetectionTargets(LatestDetections);
+            Status = $"Frame {response.frame_id}: {TrackedDetectionCount} tracked, " +
+                $"{PredictedDetectionCount} predicted";
+        }
+
+        private void UpdateDetectionTargets(VisionDetectionResult[] detections)
+        {
+            HashSet<int> receivedKeys = new HashSet<int>();
+            for (int index = 0; index < detections.Length; index++)
+            {
+                VisionDetectionResult detection = detections[index];
+                int key = detection.track_id >= 0
+                    ? detection.track_id
+                    : int.MinValue + index;
+                receivedKeys.Add(key);
+
+                if (!smoothedDetections.TryGetValue(key, out SmoothedDetectionState state))
+                {
+                    state = new SmoothedDetectionState(detection);
+                    smoothedDetections.Add(key, state);
+                }
+                else
+                {
+                    state.SetTarget(detection);
+                }
+            }
+
+            List<int> removedKeys = new List<int>();
+            foreach (int key in smoothedDetections.Keys)
+            {
+                if (!receivedKeys.Contains(key))
+                {
+                    removedKeys.Add(key);
+                }
+            }
+            foreach (int key in removedKeys)
+            {
+                smoothedDetections.Remove(key);
+            }
+
+            RebuildDisplayDetections();
+        }
+
+        private void UpdateSmoothedDetections()
+        {
+            if (smoothedDetections.Count == 0)
+            {
+                return;
+            }
+
+            float blend = 1f - Mathf.Exp(-boundingBoxSmoothingSpeed * Time.unscaledDeltaTime);
+            foreach (SmoothedDetectionState state in smoothedDetections.Values)
+            {
+                state.Step(blend);
+            }
+        }
+
+        private void RebuildDisplayDetections()
+        {
+            List<VisionDetectionResult> display = new List<VisionDetectionResult>(
+                smoothedDetections.Count);
+            foreach (SmoothedDetectionState state in smoothedDetections.Values)
+            {
+                display.Add(state.Display);
+            }
+            display.Sort((left, right) => left.track_id.CompareTo(right.track_id));
+            DisplayDetections = display.ToArray();
+        }
+
+        private void ClearDetections()
+        {
+            LatestDetections = Array.Empty<VisionDetectionResult>();
+            DisplayDetections = Array.Empty<VisionDetectionResult>();
+            smoothedDetections.Clear();
+            TrackedDetectionCount = 0;
+            PredictedDetectionCount = 0;
+        }
+
+        private VisionRoiResult CalculateWorkspaceRoi()
+        {
+            if (stationCamera == null || workspace == null)
+            {
+                return new VisionRoiResult();
+            }
+
+            Vector3 halfSize = workspace.size * 0.5f;
+            float minX = 1f;
+            float minY = 1f;
+            float maxX = 0f;
+            float maxY = 0f;
+            int visibleCornerCount = 0;
+
+            for (int x = -1; x <= 1; x += 2)
+            {
+                for (int y = -1; y <= 1; y += 2)
+                {
+                    for (int z = -1; z <= 1; z += 2)
+                    {
+                        Vector3 localCorner = workspace.center + Vector3.Scale(
+                            halfSize,
+                            new Vector3(x, y, z));
+                        Vector3 viewport = stationCamera.WorldToViewportPoint(
+                            workspace.transform.TransformPoint(localCorner));
+                        if (viewport.z <= 0f)
+                        {
+                            continue;
+                        }
+
+                        float imageY = 1f - viewport.y;
+                        minX = Mathf.Min(minX, viewport.x);
+                        minY = Mathf.Min(minY, imageY);
+                        maxX = Mathf.Max(maxX, viewport.x);
+                        maxY = Mathf.Max(maxY, imageY);
+                        visibleCornerCount++;
+                    }
+                }
+            }
+
+            if (visibleCornerCount == 0)
+            {
+                return new VisionRoiResult();
+            }
+
+            const float margin = 0.015f;
+            minX = Mathf.Clamp01(minX - margin);
+            minY = Mathf.Clamp01(minY - margin);
+            maxX = Mathf.Clamp01(maxX + margin);
+            maxY = Mathf.Clamp01(maxY + margin);
+            if (maxX - minX < 0.01f || maxY - minY < 0.01f)
+            {
+                return new VisionRoiResult();
+            }
+
+            return new VisionRoiResult
+            {
+                x_min = minX,
+                y_min = minY,
+                x_max = maxX,
+                y_max = maxY
+            };
+        }
+
+        private void ApplyVisionFraming()
+        {
+            if (!autoFrameWorkspace || stationCamera == null || workspace == null)
+            {
+                return;
+            }
+
+            Transform station = transform.parent;
+            if (station == null)
+            {
+                return;
+            }
+
+            Transform robotMount = station.Find("RobotMount");
+            float robotSide = robotMount == null || Mathf.Approximately(robotMount.localPosition.x, 0f)
+                ? Mathf.Sign(transform.localPosition.x)
+                : Mathf.Sign(robotMount.localPosition.x);
+            if (Mathf.Approximately(robotSide, 0f))
+            {
+                robotSide = 1f;
+            }
+
+            float beltSurfaceY = workspace.transform.localPosition.y - workspace.size.y * 0.5f;
+            Vector3 cameraLocalPosition = new Vector3(
+                -robotSide * cameraSideDistance,
+                beltSurfaceY + cameraHeightAboveBelt,
+                cameraAlongBeltOffset);
+            Vector3 targetLocalPosition = new Vector3(
+                0f,
+                beltSurfaceY + targetHeightAboveBelt,
+                targetAlongBeltOffset);
+
+            transform.localPosition = cameraLocalPosition;
+            transform.localRotation = Quaternion.LookRotation(
+                targetLocalPosition - cameraLocalPosition,
+                Vector3.up);
+            stationCamera.fieldOfView = visionFieldOfView;
+
+            int workspaceVisualLayer = LayerMask.NameToLayer("Ignore Raycast");
+            if (workspaceVisualLayer < 0)
+            {
+                return;
+            }
+
+            foreach (Renderer workspaceRenderer in workspace.GetComponentsInChildren<Renderer>(true))
+            {
+                workspaceRenderer.gameObject.layer = workspaceVisualLayer;
+            }
+            stationCamera.cullingMask &= ~(1 << workspaceVisualLayer);
         }
 
         private void EnsureResources()
@@ -303,6 +572,54 @@ namespace SortingFactory.Step2
                 Buffer.BlockCopy(pixels, top, row, 0, rowLength);
                 Buffer.BlockCopy(pixels, bottom, pixels, top, rowLength);
                 Buffer.BlockCopy(row, 0, pixels, bottom, rowLength);
+            }
+        }
+
+        private sealed class SmoothedDetectionState
+        {
+            private float targetCenterX;
+            private float targetCenterY;
+            private float targetWidth;
+            private float targetHeight;
+
+            public VisionDetectionResult Display { get; }
+
+            public SmoothedDetectionState(VisionDetectionResult source)
+            {
+                Display = new VisionDetectionResult();
+                CopyMetadata(source);
+                Display.bbox_center_x = source.bbox_center_x;
+                Display.bbox_center_y = source.bbox_center_y;
+                Display.bbox_width = source.bbox_width;
+                Display.bbox_height = source.bbox_height;
+                SetTarget(source);
+            }
+
+            public void SetTarget(VisionDetectionResult source)
+            {
+                CopyMetadata(source);
+                targetCenterX = source.bbox_center_x;
+                targetCenterY = source.bbox_center_y;
+                targetWidth = source.bbox_width;
+                targetHeight = source.bbox_height;
+            }
+
+            public void Step(float blend)
+            {
+                Display.bbox_center_x = Mathf.Lerp(Display.bbox_center_x, targetCenterX, blend);
+                Display.bbox_center_y = Mathf.Lerp(Display.bbox_center_y, targetCenterY, blend);
+                Display.bbox_width = Mathf.Lerp(Display.bbox_width, targetWidth, blend);
+                Display.bbox_height = Mathf.Lerp(Display.bbox_height, targetHeight, blend);
+            }
+
+            private void CopyMetadata(VisionDetectionResult source)
+            {
+                Display.track_id = source.track_id;
+                Display.class_id = source.class_id;
+                Display.class_name = source.class_name;
+                Display.confidence = source.confidence;
+                Display.tracking_status = source.tracking_status;
+                Display.prediction_age_ms = source.prediction_age_ms;
             }
         }
     }

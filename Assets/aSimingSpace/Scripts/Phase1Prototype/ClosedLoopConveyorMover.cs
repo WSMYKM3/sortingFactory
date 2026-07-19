@@ -21,6 +21,11 @@ namespace SortingFactory.Phase1
             snapRotation = shouldSnapRotation;
         }
 
+        public void SetConveyorSpeed(float speed)
+        {
+            conveyorSpeed = Mathf.Max(0f, speed);
+        }
+
         private void Awake()
         {
             splineContainer = GetComponent<SplineContainer>();

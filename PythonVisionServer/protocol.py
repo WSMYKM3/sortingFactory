@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 MAX_HEADER_BYTES = 64 * 1024
 
 
@@ -48,6 +48,10 @@ def decode_frame_packet(packet: bytes) -> FramePacket:
         "width",
         "height",
         "image_format",
+        "roi_x_min",
+        "roi_y_min",
+        "roi_x_max",
+        "roi_y_max",
     }
     missing = required_fields.difference(metadata)
     if missing:
@@ -60,6 +64,17 @@ def decode_frame_packet(packet: bytes) -> FramePacket:
         raise FrameProtocolError("robot and camera identities cannot be empty")
     if metadata["width"] <= 0 or metadata["height"] <= 0:
         raise FrameProtocolError("frame dimensions must be positive")
+
+    roi_values = (
+        metadata["roi_x_min"],
+        metadata["roi_y_min"],
+        metadata["roi_x_max"],
+        metadata["roi_y_max"],
+    )
+    if any(value < 0 or value > 1 for value in roi_values):
+        raise FrameProtocolError("ROI values must be normalized between 0 and 1")
+    if metadata["roi_x_min"] >= metadata["roi_x_max"] or metadata["roi_y_min"] >= metadata["roi_y_max"]:
+        raise FrameProtocolError("ROI minimum values must be smaller than maximum values")
 
     jpeg = packet[image_offset:]
     if len(jpeg) < 4 or not jpeg.startswith(b"\xff\xd8") or not jpeg.endswith(b"\xff\xd9"):

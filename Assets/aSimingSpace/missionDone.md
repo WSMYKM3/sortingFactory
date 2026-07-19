@@ -2,7 +2,7 @@
 
 更新日期：2026-07-18
 
-当前进度：**Step 1 已完成，Step 2 已完成并通过基础验证。下一阶段为 Step 3。**
+当前进度：**Step 1、Step 2 已完成；Step 3 检测、跟踪、回传和 Unity 可视化已实现并通过管线验证。**
 
 ## Step 1：多机械臂传送带场景
 
@@ -10,7 +10,8 @@
 
 - 已将原传送带延长并构建为闭合环形路径。
 - 物体能够沿 Spline 路径循环运动。
-- 主传送带当前使用固定速度 `1 unit/s`。
+- Feeder 和主传送带上的物体统一使用 `0.5 unit/s`，由 `Phase1SceneSetup` 集中设置。
+- Step 3 Runtime 面板提供 `0.10-2.00 unit/s` Slider，可在 Play Mode 实时同步修改所有传送物体速度。
 - 物体在传送带上使用 Kinematic Rigidbody 和 Spline 驱动。
 - 已减少物理碰撞导致的抖动、弹跳和飞出传送带问题。
 - 物体进入主传送带后会保留路径位置、高度和朝向。
@@ -162,12 +163,46 @@ PythonVisionServer/received_frames/arm_n_camera_latest.jpg
 - Unity Runtime 脚本编译通过。
 - Unity Editor 脚本编译通过。
 - Python 文件语法检查通过。
-- Frame Protocol 的 4 个单元测试全部通过。
+- Frame Protocol、ROI 和过滤的 8 个单元测试全部通过。
 - 已执行真实 WebSocket 往返测试。
 - Python 正确收到 `arm_1 / arm_1_camera / frame_id` Metadata。
 - Unity 可以收到 Python ACK。
 - `/stats` 可以按 Camera ID 分别显示接收结果。
 - 手动 JPEG 截图已经成功生成。
+
+## Step 3：YOLO 实时检测与 ByteTrack 跟踪
+
+- Python 已加载 COCO 预训练 `yolo26n.pt`。
+- Python 会先裁剪 Workspace ROI，再以 `640 x 640` 推理并映射回完整画面。
+- Detector confidence floor 为 `0.10`，ByteTrack 高置信度/新建轨迹阈值为 `0.45`，IoU 为 `0.70`。
+- 当前主动检测类别限制为 `bottle / cup / banana / apple / orange`，减少传送带纹理误检。
+- Apple Silicon Server 实测选择 `mps`，CPU 作为 fallback。
+- 每台 Camera ID 使用独立的 ByteTrack 状态，避免三台相机的 track ID 互相污染。
+- Python 返回 class、confidence、归一化 bounding box、track ID 和 tracking status。
+- 弱检测可以维持已有 Track；1-3 帧漏检会返回最多 `300 ms` 的淡化 predicted 轨迹。
+- Unity 协议已升级到 v2，并校验 Arm ID、Camera ID 和 Frame ID。
+- Unity 每帧将 Workspace Collider 投影为归一化 ROI，Python 忽略 ROI 外结果。
+- 已过滤覆盖超过 70% 画面的明显异常检测框。
+- Unity 面板已显示 ROI、bounding box、类别、置信度和 persistent track ID。
+- Unity 在服务器帧之间平滑 bbox，并区分真实 `tracked` 与淡色 `PRED` 结果。
+- 主面板显示实际 Server FPS、tracked/predicted 数量和 inference latency。
+- Unity 面板顶部只汇总三台相机的 `OFF / LIVE` 推流状态。
+- 独立 `LIVE DETECTIONS` 面板按 Arm 显示当前 track ID、类别和置信度，并支持滚动。
+- 已添加单独启动当前 Arm 和同时启动/停止三台 Camera Stream 的控制按钮。
+- WebSocket 首次推理超时已由 `2500 ms` 调整到 `15000 ms`。
+- `/health` 会显示模型、tracker、device 和推理参数。
+- `/classes` 会返回 COCO 的全部 80 个类别。
+
+Step 3 实测结果：
+
+- YOLO26n 权重 SHA-256 校验通过。
+- Python 真实 JPEG 推理通过。
+- 完整 WebSocket v2 往返通过。
+- 连续两帧的 ByteTrack ID 均保持为 `1`。
+- MPS warm-up 后两次实测推理约为 `17.6 ms` 和 `8.4 ms`。
+- Unity Runtime C# 使用项目当前 Roslyn response file 编译通过。
+
+当前素材限制：场景中的 Bottle 是 COCO 类别，但简单几何占位模型不保证可靠识别；COCO 没有通用 Can 和 Box 类别。要稳定识别这三类，需要换成写实物体模型或训练自定义 YOLO 权重。
 
 详细启动命令和自测步骤见：
 
@@ -191,15 +226,15 @@ Assets/aSimingSpace/selfTest.md
 | `PythonVisionServer/server.py` | FastAPI WebSocket 和 HTTP Server |
 | `PythonVisionServer/protocol.py` | Python 帧协议解析和验证 |
 | `PythonVisionServer/tests/test_protocol.py` | Protocol 单元测试 |
+| `PythonVisionServer/vision_service.py` | YOLO26n、ROI 过滤和分相机 ByteTrack |
+| `PythonVisionServer/tests/test_vision_service.py` | ROI 和检测框过滤测试 |
 
 ## 当前尚未完成
 
 以下内容属于后续步骤，当前实现中还没有：
 
-- Step 3 的 YOLO 模型加载和真实物体检测。
-- Step 3 的 ByteTrack 多物体追踪。
-- Python 向 Unity 返回 bounding box、class、confidence 和 track ID。
-- Unity 相机画面上的 bounding box 和 label 显示。
+- 当前三个占位物体类别的自定义 YOLO 数据集和训练权重。
+- 使用实际移动 Bottle 模型进行完整场景识别验收。
 - 物理 Latest Pick Line 及其相机画面显示。
 - Remaining Pickable Time 计算。
 - Execute 或 Skip 决策。
@@ -209,16 +244,15 @@ Assets/aSimingSpace/selfTest.md
 - 多机械臂并行抓取验证。
 - 每台机械臂的数据记录和全局监控。
 
-当前 Python Server 是 **Step 2 图像管线验证服务**，不是 Step 3 YOLO 推理服务。
+当前 Python Server 已是 **Step 3 YOLO + ByteTrack 推理服务**。
 
 ## 下一阶段
 
-下一步从 `MainMission.md` 的 **Step 3: Add Real-Time Object Detection and Tracking** 开始：
+下一步从 `MainMission.md` 的 **Step 4: Determine Whether There Is Enough Time to Pick** 开始：
 
 ```text
-Unity Camera Stream
--> Python YOLO Detection
--> ByteTrack
--> Structured Results
--> Unity Bounding Boxes
+Tracked Object
+-> Latest Pick Line
+-> Remaining Pickable Time
+-> Execute or Skip
 ```
