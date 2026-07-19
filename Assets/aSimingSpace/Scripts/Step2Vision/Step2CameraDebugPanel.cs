@@ -8,8 +8,8 @@ namespace SortingFactory.Step2
     {
         private const float PanelWidth = 500f;
         private const float PanelHeight = 548f;
-        private const float DetectionPanelWidth = 250f;
-        private const float DetectionPanelHeight = 360f;
+        private const float DetectionPanelWidth = 340f;
+        private const float DetectionPanelHeight = 548f;
         private const float PanelGap = 12f;
 
         private WorkstationCameraController[] cameras = Array.Empty<WorkstationCameraController>();
@@ -181,7 +181,7 @@ namespace SortingFactory.Step2
             GUI.Box(panel, GUIContent.none);
             GUI.Label(
                 new Rect(panel.x + 16f, panel.y + 12f, panel.width - 32f, 24f),
-                "LIVE DETECTIONS");
+                "PERSISTENT TARGETS");
 
             Rect viewport = new Rect(
                 panel.x + 10f,
@@ -210,25 +210,38 @@ namespace SortingFactory.Step2
                     GUI.Label(new Rect(14f, y, content.width - 20f, 20f), "Stream is off");
                     y += 22f;
                 }
-                else if (camera.DisplayDetections.Length == 0)
+                else if (camera.PersistentTargets.Length == 0)
                 {
-                    GUI.Label(new Rect(14f, y, content.width - 20f, 20f), "No objects detected");
+                    GUI.Label(new Rect(14f, y, content.width - 20f, 20f), "No persistent targets");
                     y += 22f;
                 }
                 else
                 {
-                    foreach (VisionDetectionResult detection in camera.DisplayDetections)
+                    foreach (PersistentVisionTarget target in camera.PersistentTargets)
                     {
-                        string trackLabel = detection.track_id >= 0
-                            ? $"#{detection.track_id}"
-                            : "--";
-                        string predictionLabel = detection.tracking_status == "predicted"
-                            ? "  PRED"
-                            : string.Empty;
+                        string sourceTrack = target.SourceTrackId >= 0
+                            ? $"T#{target.SourceTrackId}"
+                            : "T#--";
+                        string state = target.IsLocked
+                            ? "LOCKED"
+                            : target.State.ToString().ToUpperInvariant();
                         GUI.Label(
                             new Rect(14f, y, content.width - 20f, 20f),
-                            $"{trackLabel}  {detection.class_name}  " +
-                                $"{detection.confidence:P0}{predictionLabel}");
+                            $"L#{target.LogicalId} / {sourceTrack}  {target.ClassName}  {state}");
+                        y += 19f;
+                        GUI.Label(
+                            new Rect(22f, y, content.width - 28f, 20f),
+                            $"hits {target.TotalObservedFrames} | miss {target.MissedFrames} | " +
+                                $"gap {target.ObservationGapSeconds * 1000f:0} ms");
+                        y += 19f;
+                        string path = target.HasConveyorPosition
+                            ? $"s {target.PredictedSplineDistance:0.00} | " +
+                                $"x,z {target.PredictedBeltPosition.x:0.0}," +
+                                $"{target.PredictedBeltPosition.z:0.0}"
+                            : "s -- | conveyor projection unavailable";
+                        GUI.Label(
+                            new Rect(22f, y, content.width - 28f, 20f),
+                            $"{path} | ID changes {target.TrackIdSwitches}");
                         y += 22f;
                     }
                 }
@@ -245,10 +258,11 @@ namespace SortingFactory.Step2
             float height = 4f;
             foreach (WorkstationCameraController camera in cameras)
             {
+                int targetRows = Mathf.Max(1, camera.PersistentTargets.Length);
                 int resultRows = camera.IsStreaming
-                    ? Mathf.Max(1, camera.DisplayDetections.Length)
+                    ? targetRows * 3
                     : 1;
-                height += 24f + resultRows * 22f + 14f;
+                height += 24f + resultRows * 20f + 14f;
             }
             return Mathf.Max(height, DetectionPanelHeight - 50f);
         }
@@ -312,17 +326,25 @@ namespace SortingFactory.Step2
                     detection.bbox_width,
                     detection.bbox_height);
                 Color color = DetectionColor(detection.track_id, detection.class_id);
-                bool predicted = detection.tracking_status == "predicted";
+                bool predicted = detection.tracking_status == "predicted" ||
+                    detection.tracking_status == "coasting";
+                bool tentative = detection.tracking_status == "tentative";
                 if (predicted)
                 {
                     color.a = 0.48f;
                 }
+                else if (tentative)
+                {
+                    color.a = 0.7f;
+                }
                 DrawOutline(detectionRect, color, predicted ? 2f : 3f);
 
-                string trackLabel = detection.track_id >= 0 ? $"#{detection.track_id} " : string.Empty;
-                string predictionLabel = predicted ? " PRED" : string.Empty;
+                string trackLabel = detection.track_id >= 0
+                    ? $"L#{detection.track_id} "
+                    : string.Empty;
+                string stateLabel = DetectionStateLabel(detection.tracking_status);
                 string label = $"{trackLabel}{detection.class_name} " +
-                    $"{detection.confidence:P0}{predictionLabel}";
+                    $"{detection.confidence:P0}{stateLabel}";
                 float labelWidth = Mathf.Clamp(label.Length * 7.2f + 10f, 90f, detectionRect.width);
                 Rect labelRect = new Rect(
                     detectionRect.x,
@@ -359,6 +381,22 @@ namespace SortingFactory.Step2
         private static float ImageToPreviewY(float imageY)
         {
             return 1f - imageY;
+        }
+
+        private static string DetectionStateLabel(string status)
+        {
+            switch (status)
+            {
+                case "coasting":
+                case "predicted":
+                    return " COAST";
+                case "tentative":
+                    return " TENT";
+                case "locked":
+                    return " LOCK";
+                default:
+                    return string.Empty;
+            }
         }
 
         private static void DrawOutline(Rect rect, Color color, float thickness)

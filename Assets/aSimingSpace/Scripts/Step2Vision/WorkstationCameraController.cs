@@ -2,8 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using SortingFactory.Phase1;
+using SplineMeshTools.Core;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Splines;
 
 namespace SortingFactory.Step2
 {
@@ -32,12 +35,22 @@ namespace SortingFactory.Step2
         [SerializeField, Min(0f)] private float targetHeightAboveBelt = 0.55f;
         [SerializeField] private float targetAlongBeltOffset = 0.45f;
         [SerializeField, Range(25f, 80f)] private float visionFieldOfView = 46f;
+        [SerializeField, Range(0.6f, 1.2f)] private float cameraViewDistanceScale = 0.78f;
 
         [Header("Vision Server")]
         [SerializeField] private string serverUrl = "ws://127.0.0.1:8000/ws/camera";
 
         [Header("Overlay Smoothing")]
         [SerializeField, Range(1f, 40f)] private float boundingBoxSmoothingSpeed = 14f;
+
+        [Header("Persistent Tracking")]
+        [SerializeField, Min(1)] private int targetConfirmationHits = 3;
+        [SerializeField, Range(0.05f, 0.5f)] private float coastingDelaySeconds = 0.18f;
+        [SerializeField, Range(0.2f, 1f)] private float tentativeTimeoutSeconds = 0.45f;
+        [SerializeField, Range(0.3f, 2f)] private float targetLostTimeoutSeconds = 0.85f;
+        [SerializeField, Range(0.5f, 5f)] private float lostTargetRetentionSeconds = 1.5f;
+        [SerializeField, Range(0.02f, 0.4f)] private float reassociationImageDistance = 0.16f;
+        [SerializeField, Min(0.1f)] private float reassociationPathDistance = 1f;
 
         private RenderTexture cameraTexture;
         private VisionFrameWebSocket webSocket;
@@ -46,6 +59,9 @@ namespace SortingFactory.Step2
         private bool captureInProgress;
         private float nextStreamTime;
         private long frameId;
+        private PersistentVisionTargetRegistry targetRegistry;
+        private Phase1SceneSetup phase1SceneSetup;
+        private SplineContainer conveyorPath;
         private readonly Dictionary<int, SmoothedDetectionState> smoothedDetections =
             new Dictionary<int, SmoothedDetectionState>();
 
@@ -69,6 +85,10 @@ namespace SortingFactory.Step2
             Array.Empty<VisionDetectionResult>();
         public VisionDetectionResult[] DisplayDetections { get; private set; } =
             Array.Empty<VisionDetectionResult>();
+        public PersistentVisionTarget[] PersistentTargets => targetRegistry == null
+            ? Array.Empty<PersistentVisionTarget>()
+            : targetRegistry.Snapshot();
+        public PersistentVisionTarget LockedTarget => targetRegistry?.LockedTarget;
         public string LastCapturePath { get; private set; } = string.Empty;
         public string Status { get; private set; } = "Ready";
 
@@ -121,20 +141,20 @@ namespace SortingFactory.Step2
         private void Awake()
         {
             ApplyVisionFraming();
+            EnsurePersistentTracking();
             EnsureResources();
             ApplyCameraState();
         }
 
         private void OnValidate()
         {
-            if (!Application.isPlaying)
-            {
-                ApplyVisionFraming();
-            }
+            ApplyVisionFraming();
+            ConfigureTargetRegistry();
         }
 
         private void Update()
         {
+            UpdatePersistentTargets();
             UpdateSmoothedDetections();
             if (!streaming || captureInProgress || Time.unscaledTime < nextStreamTime)
             {
@@ -320,9 +340,89 @@ namespace SortingFactory.Step2
             PredictedDetectionCount = response.predicted_count;
             ActiveModelName = response.model_name ?? string.Empty;
             ActiveTrackerName = response.tracker_name ?? string.Empty;
-            UpdateDetectionTargets(LatestDetections);
+            EnsurePersistentTracking();
+            double now = Time.unscaledTimeAsDouble;
+            double captureAgeSeconds = Math.Max(
+                0d,
+                (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() -
+                    sentMetadata.captured_at_unix_ms) / 1000d);
+            double observationTime = now - Math.Min(2d, captureAgeSeconds);
+            targetRegistry.ProcessFrame(
+                LatestDetections,
+                observationTime,
+                now,
+                GetConveyorLength(),
+                ProjectDetectionToConveyor);
+            UpdatePersistentTargets();
             Status = $"Frame {response.frame_id}: {TrackedDetectionCount} tracked, " +
                 $"{PredictedDetectionCount} predicted";
+        }
+
+        public bool TryLockBestTarget(out PersistentVisionTarget target)
+        {
+            EnsurePersistentTracking();
+            return targetRegistry.TryLockBestTarget(out target);
+        }
+
+        public void ReleaseLockedTarget()
+        {
+            targetRegistry?.ReleaseLockedTarget();
+        }
+
+        private void EnsurePersistentTracking()
+        {
+            if (targetRegistry == null)
+            {
+                targetRegistry = new PersistentVisionTargetRegistry();
+            }
+
+            if (phase1SceneSetup == null)
+            {
+                phase1SceneSetup = FindFirstObjectByType<Phase1SceneSetup>();
+            }
+            if (conveyorPath == null && phase1SceneSetup != null)
+            {
+                conveyorPath = phase1SceneSetup.ConveyorPath;
+            }
+            ConfigureTargetRegistry();
+        }
+
+        private void ConfigureTargetRegistry()
+        {
+            if (targetRegistry == null)
+            {
+                return;
+            }
+
+            targetRegistry.ConfirmationHits = Mathf.Max(1, targetConfirmationHits);
+            targetRegistry.CoastingDelaySeconds = Mathf.Max(0.01f, coastingDelaySeconds);
+            targetRegistry.TentativeTimeoutSeconds = Mathf.Max(
+                targetRegistry.CoastingDelaySeconds,
+                tentativeTimeoutSeconds);
+            targetRegistry.LostTimeoutSeconds = Mathf.Max(
+                targetRegistry.TentativeTimeoutSeconds,
+                targetLostTimeoutSeconds);
+            targetRegistry.LostRetentionSeconds = Mathf.Max(0.1f, lostTargetRetentionSeconds);
+            targetRegistry.ReassociationImageDistance = Mathf.Max(
+                0.001f,
+                reassociationImageDistance);
+            targetRegistry.ReassociationPathDistance = Mathf.Max(
+                0.01f,
+                reassociationPathDistance);
+        }
+
+        private void UpdatePersistentTargets()
+        {
+            EnsurePersistentTracking();
+            float speed = phase1SceneSetup == null
+                ? 0f
+                : phase1SceneSetup.ConveyorObjectSpeed;
+            targetRegistry.Tick(
+                Time.unscaledTimeAsDouble,
+                speed,
+                GetConveyorLength(),
+                EvaluateConveyorPosition);
+            UpdateDetectionTargets(targetRegistry.BuildDisplayDetections());
         }
 
         private void UpdateDetectionTargets(VisionDetectionResult[] detections)
@@ -394,8 +494,87 @@ namespace SortingFactory.Step2
             LatestDetections = Array.Empty<VisionDetectionResult>();
             DisplayDetections = Array.Empty<VisionDetectionResult>();
             smoothedDetections.Clear();
+            targetRegistry?.Clear();
             TrackedDetectionCount = 0;
             PredictedDetectionCount = 0;
+        }
+
+        private ConveyorProjection? ProjectDetectionToConveyor(VisionDetectionResult detection)
+        {
+            if (stationCamera == null || workspace == null || conveyorPath == null ||
+                conveyorPath.Spline == null)
+            {
+                return null;
+            }
+
+            float imageBottomY = Mathf.Clamp01(
+                detection.bbox_center_y + detection.bbox_height * 0.5f);
+            Ray ray = stationCamera.ViewportPointToRay(new Vector3(
+                Mathf.Clamp01(detection.bbox_center_x),
+                1f - imageBottomY,
+                0f));
+            Plane beltPlane = new Plane(Vector3.up, new Vector3(0f, workspace.bounds.min.y, 0f));
+            if (!beltPlane.Raycast(ray, out float enter) || enter <= 0f)
+            {
+                return null;
+            }
+
+            Vector3 beltPoint = ray.GetPoint(enter);
+            (Spline closestSpline, float closestDistance) =
+                SplineMeshUtils.FindClosestSplineAndPosition(conveyorPath, beltPoint);
+            if (closestSpline == null || closestSpline.GetLength() <= 0.001f)
+            {
+                return null;
+            }
+
+            float normalizedPosition = SplineUtility.GetNormalizedInterpolation(
+                closestSpline,
+                closestDistance,
+                PathIndexUnit.Distance);
+            Vector3 pathPosition = conveyorPath.EvaluatePosition(normalizedPosition);
+            Vector3 tangent = conveyorPath.EvaluateTangent(normalizedPosition);
+            tangent.y = 0f;
+            tangent = tangent.sqrMagnitude > 0.0001f
+                ? tangent.normalized
+                : transform.forward;
+            Vector3 side = Vector3.Cross(Vector3.up, tangent).normalized;
+            float lateralOffset = Vector3.Dot(beltPoint - pathPosition, side);
+            return new ConveyorProjection(closestDistance, lateralOffset, beltPoint);
+        }
+
+        private float GetConveyorLength()
+        {
+            return conveyorPath == null || conveyorPath.Spline == null
+                ? 0f
+                : conveyorPath.Spline.GetLength();
+        }
+
+        private Vector3 EvaluateConveyorPosition(float distance, float lateralOffset)
+        {
+            if (conveyorPath == null || conveyorPath.Spline == null)
+            {
+                return Vector3.zero;
+            }
+
+            float length = conveyorPath.Spline.GetLength();
+            if (length <= 0.001f)
+            {
+                return Vector3.zero;
+            }
+
+            float normalizedPosition = SplineUtility.GetNormalizedInterpolation(
+                conveyorPath.Spline,
+                Mathf.Repeat(distance, length),
+                PathIndexUnit.Distance);
+            Vector3 pathPosition = conveyorPath.EvaluatePosition(normalizedPosition);
+            Vector3 tangent = conveyorPath.EvaluateTangent(normalizedPosition);
+            tangent.y = 0f;
+            tangent = tangent.sqrMagnitude > 0.0001f
+                ? tangent.normalized
+                : transform.forward;
+            Vector3 side = Vector3.Cross(Vector3.up, tangent).normalized;
+            pathPosition.y = workspace == null ? pathPosition.y : workspace.bounds.min.y;
+            return pathPosition + side * lateralOffset;
         }
 
         private VisionRoiResult CalculateWorkspaceRoi()
@@ -485,7 +664,7 @@ namespace SortingFactory.Step2
             }
 
             float beltSurfaceY = workspace.transform.localPosition.y - workspace.size.y * 0.5f;
-            Vector3 cameraLocalPosition = new Vector3(
+            Vector3 baseCameraLocalPosition = new Vector3(
                 -robotSide * cameraSideDistance,
                 beltSurfaceY + cameraHeightAboveBelt,
                 cameraAlongBeltOffset);
@@ -493,6 +672,10 @@ namespace SortingFactory.Step2
                 0f,
                 beltSurfaceY + targetHeightAboveBelt,
                 targetAlongBeltOffset);
+            Vector3 cameraLocalPosition = Vector3.LerpUnclamped(
+                targetLocalPosition,
+                baseCameraLocalPosition,
+                cameraViewDistanceScale);
 
             transform.localPosition = cameraLocalPosition;
             transform.localRotation = Quaternion.LookRotation(

@@ -33,17 +33,31 @@ namespace SortingFactory.Phase1
         [SerializeField, HideInInspector] private Material feederBeltMaterial;
         [SerializeField, HideInInspector] private int generatedContentVersion;
 
+        private SplineContainer mainConveyorPath;
+
         public const string SceneContentRootName = "Phase1 Scene Content";
         public const int CurrentGeneratedContentVersion = 2;
 
         public GameObject RobotArmPrefab => robotArmPrefab;
         public float ConveyorObjectSpeed => conveyorObjectSpeed;
+        public SplineContainer ConveyorPath
+        {
+            get
+            {
+                if (mainConveyorPath == null)
+                {
+                    mainConveyorPath = FindConveyorPath();
+                }
+                return mainConveyorPath;
+            }
+        }
         public bool HasSceneContent => transform.Find(SceneContentRootName) != null;
         public bool NeedsGeneratedContentUpgrade =>
             generatedContentVersion < CurrentGeneratedContentVersion;
 
         private void Awake()
         {
+            mainConveyorPath = FindConveyorPath();
             ApplyConveyorObjectSpeed();
         }
 
@@ -81,6 +95,7 @@ namespace SortingFactory.Phase1
                 Debug.LogError("Step 1 could not find a conveyor SplineContainer in MainScene.", this);
                 return null;
             }
+            mainConveyorPath = conveyorPath;
 
             if (stationMaterials == null || stationMaterials.Length == 0 ||
                 objectMaterials == null || objectMaterials.Length == 0 ||
