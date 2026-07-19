@@ -3,6 +3,7 @@ using UnityEngine.Splines;
 using Unity.Mathematics;
 using SortingFactory.Step2;
 using SortingFactory.Step4;
+using SortingFactory.Step7;
 
 namespace SortingFactory.Phase1
 {
@@ -98,6 +99,11 @@ namespace SortingFactory.Phase1
             if (GetComponent<FactoryLightingController>() == null)
             {
                 gameObject.AddComponent<FactoryLightingController>();
+            }
+
+            if (GetComponent<MultiRobotOperationMonitor>() == null)
+            {
+                gameObject.AddComponent<MultiRobotOperationMonitor>();
             }
         }
 

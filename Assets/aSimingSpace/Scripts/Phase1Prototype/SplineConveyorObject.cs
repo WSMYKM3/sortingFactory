@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.Splines;
+using SplineMeshTools.Core;
 
 namespace SortingFactory.Phase1
 {
@@ -56,6 +57,25 @@ namespace SortingFactory.Phase1
                 body.linearVelocity = Vector3.zero;
                 body.angularVelocity = Vector3.zero;
             }
+        }
+
+        public void ResumeConveyorMotionFromCurrentPosition()
+        {
+            if (conveyorPath != null && conveyorPath.Spline != null)
+            {
+                (Spline closestSpline, float closestDistance) =
+                    SplineMeshUtils.FindClosestSplineAndPosition(
+                        conveyorPath,
+                        transform.position);
+                if (closestSpline != null)
+                {
+                    distanceAlongSpline = Mathf.Repeat(
+                        closestDistance,
+                        closestSpline.GetLength());
+                }
+            }
+
+            SetConveyorMotionEnabled(true);
         }
 
         public void SetConveyorSpeed(float speed)

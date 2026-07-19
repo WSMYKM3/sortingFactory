@@ -389,14 +389,9 @@ Possible outcomes include:
 * Target tracking was lost.
 * The robotic arm could not complete the grasp.
 
-During the initial Unity prototype, these failure conditions should be simulated randomly to test system recovery behavior.
+The Unity prototype must not inject random or artificial grasp failures.
 
-Failure simulation should:
-
-* Be enabled by default during recovery testing.
-* Use an initial failure probability of **15%**.
-* Allow the probability to be changed later.
-* Allow failure simulation to be turned on or off without changing the normal grasping workflow.
+Recovery behavior should respond only to failures that occur naturally during the normal detection and grasping workflow, such as a lost target, an object leaving the workspace, or a grasp that cannot be completed.
 
 After a failed attempt:
 
@@ -452,6 +447,14 @@ The main goal is to confirm that the system behaves correctly without a shared g
 # Step 8: Record SO-101-Compatible Data for Each Robotic Arm
 
 Each robotic arm should independently record data in a structure that can later be mapped to an SO-101 and LeRobot-compatible training dataset.
+
+The first implementation saves CSV data only. It does not save camera images or video files.
+
+CSV output root:
+
+```text
+/Users/simon/Documents/WsmFiles/SortingFactoryScreenshots/csvdata
+```
 
 The system must record every grasp attempt, including both successful and failed attempts.
 
@@ -588,8 +591,6 @@ The global section of the control room should display:
 * Overall conveyor throughput.
 * Average task duration.
 * Current session duration.
-* Failure-simulation status.
-* Current failure probability.
 
 The control room should also make it possible to observe comparisons such as:
 
@@ -612,7 +613,7 @@ It must not:
 
 ---
 
-# Step 10: Add Session and Failure-Simulation Controls
+# Step 10: Add Session Controls
 
 Add a session-control layer for repeatable testing and dataset collection.
 
@@ -634,7 +635,7 @@ When a session starts:
 * Reset session-level counters.
 * Start recording all robotic-arm observations, actions, decisions, and results.
 * Start the session timer.
-* Record the current conveyor and failure-simulation settings.
+* Record the current conveyor, robotic-arm, camera, and vision-service settings.
 
 When a session ends:
 
@@ -644,27 +645,7 @@ When a session ends:
 * Generate a session summary.
 * Keep the control-room results available for review.
 
-Failure simulation should include:
-
-* An `On / Off` control.
-* A configurable failure-probability value.
-* A default failure probability of **15%**.
-* A visible status in the control room.
-
-Random failures should be applied only after a robotic arm has committed to a grasp attempt.
-
-A simulated failure must still follow the normal recovery workflow:
-
-```text
-Random failure occurs
-→ Record the failure category
-→ End the local attempt
-→ Return the arm to a safe state
-→ Allow the object to continue downstream when applicable
-→ Let the next robotic arm independently re-detect it
-```
-
-Turning failure simulation off should restore normal grasp execution without changing the rest of the system.
+No failure-simulation control or configurable artificial failure probability is required.
 
 ---
 
@@ -682,12 +663,6 @@ Object A is detected and successfully picked by Arm 1
 Object B is skipped by Arm 1 because insufficient time remains
         ↓
 Arm 2 independently detects and picks Object B
-        ↓
-A random or predefined failure occurs during another grasp
-        ↓
-The object continues downstream
-        ↓
-A later arm independently re-detects and recovers the object
         ↓
 The control room displays the final session results
 ```
@@ -721,8 +696,6 @@ The session folder should preserve:
 * Session ID.
 * Session start and end time.
 * Conveyor settings.
-* Failure-simulation status.
-* Failure probability.
 * Robotic-arm configuration.
 * Camera and vision-service status.
 * Per-frame robot observations.
@@ -902,18 +875,16 @@ Phase 1 is complete when the system can:
 9. Skip objects that cannot be processed in time.
 10. Prevent overlapping workspace and grasp conflicts.
 11. Allow multiple robotic arms to operate simultaneously.
-12. Simulate random grasp failures with a default 15% probability.
-13. Allow failure simulation to be enabled, disabled, and adjusted.
-14. Recover safely from simulated failures.
-15. Allow downstream robotic arms to independently re-detect failed or skipped objects.
-16. Record SO-101-compatible robot observations and actions for every attempt.
-17. Retain both successful and failed episodes.
-18. Define success as secure grasp, conveyor removal, and correct placement.
-19. Start and stop recording through explicit sessions.
-20. Save each session to a timestamped folder containing per-arm CSV files and a summary.
-21. Display per-arm and system-wide status through a localhost HTML control room.
-22. Calculate success rate from successful grasps divided by total grasp attempts.
-23. Display streaming, connection, failure-simulation, throughput, timing, and utilization status.
+12. Recover safely from failures that occur during the normal runtime workflow.
+13. Allow downstream robotic arms to independently re-detect failed or skipped objects.
+14. Record SO-101-compatible robot observations and actions for every attempt.
+15. Retain both successful and failed episodes.
+16. Define success as secure grasp, conveyor removal, and correct placement.
+17. Start and stop recording through explicit sessions.
+18. Save each session to a timestamped folder containing per-arm CSV files and a summary.
+19. Display per-arm and system-wide status through a localhost HTML control room.
+20. Calculate success rate from successful grasps divided by total grasp attempts.
+21. Display streaming, connection, throughput, timing, and utilization status.
 
 The optional reproducible demo scenario and data-driven grasp-time estimator are not required to complete Phase 1.
 

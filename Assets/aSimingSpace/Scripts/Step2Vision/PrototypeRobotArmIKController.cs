@@ -76,7 +76,9 @@ namespace SortingFactory.Step4
         private Transform physicalTarget;
         private Transform originalTargetParent;
         private Rigidbody heldBody;
+        private ConveyorPickClaim physicalClaim;
         private bool heldBodyDetectedCollisions;
+        private bool physicalTargetAttached;
         private Vector3 placementGestureTarget;
         private Vector3 liftTarget;
         private float dropTransportHeight;
@@ -87,6 +89,12 @@ namespace SortingFactory.Step4
 
         public string MotionState => phase.ToString();
         public string HeldObjectName => physicalTarget == null ? string.Empty : physicalTarget.name;
+        public float ShoulderPanPosition => baseYawAngle;
+        public float ShoulderLiftPosition => shoulderAngle;
+        public float ElbowFlexPosition => elbowAngle;
+        public float WristFlexPosition => wristFlexAngle;
+        public float WristRollPosition => wristRollAngle;
+        public float GripperPosition => gripperBlend;
 
         public void Configure(
             WorkstationPickDecisionController newDecisionController,
@@ -166,6 +174,17 @@ namespace SortingFactory.Step4
             StabilizeHeldObject();
         }
 
+        private void OnDisable()
+        {
+            if (!Application.isPlaying)
+            {
+                return;
+            }
+
+            ReleasePhysicalTarget(true);
+            ReleasePhysicalTargetClaim();
+        }
+
         private void UpdateIdle()
         {
             SetGripperBlend(0f);
@@ -193,6 +212,16 @@ namespace SortingFactory.Step4
             physicalTarget = ResolvePhysicalTarget(activeLogicalTargetId, activeVisionTarget);
             if (physicalTarget != null)
             {
+                if (!TryAcquirePhysicalTargetClaim())
+                {
+                    decisionController.ReportPhysicalClaimConflict();
+                    string owner = physicalClaim == null
+                        ? "another arm"
+                        : physicalClaim.OwnerArmId;
+                    FailCurrentTask($"Physical object is already claimed by {owner}");
+                    return;
+                }
+
                 SetPhase(MotionPhase.Approach, $"Approaching {physicalTarget.name}");
                 return;
             }
@@ -305,7 +334,7 @@ namespace SortingFactory.Step4
                 : physicalTarget.name;
             if (!PlacePhysicalTargetInDropZoneImmediately())
             {
-                ReleasePhysicalTarget();
+                ReleasePhysicalTarget(true);
                 FailCurrentTask("Could not place the attached object in the drop zone");
                 return;
             }
@@ -388,7 +417,8 @@ namespace SortingFactory.Step4
                 return;
             }
 
-            ReleasePhysicalTarget();
+            ReleasePhysicalTarget(false);
+            ReleasePhysicalTargetClaim();
             SetPhase(MotionPhase.ReturnHome, "Returning robot to home pose");
         }
 
@@ -879,6 +909,31 @@ namespace SortingFactory.Step4
             return Vector2.Distance(candidatePosition, predictedPosition) <= 2f;
         }
 
+        private bool TryAcquirePhysicalTargetClaim()
+        {
+            if (physicalTarget == null)
+            {
+                return false;
+            }
+
+            physicalClaim = physicalTarget.GetComponent<ConveyorPickClaim>();
+            if (physicalClaim == null)
+            {
+                physicalClaim = physicalTarget.gameObject.AddComponent<ConveyorPickClaim>();
+            }
+
+            return physicalClaim.TryAcquire(workstation.ArmId);
+        }
+
+        private void ReleasePhysicalTargetClaim()
+        {
+            if (physicalClaim != null && workstation != null)
+            {
+                physicalClaim.Release(workstation.ArmId);
+            }
+            physicalClaim = null;
+        }
+
         private static bool TryGetRendererBounds(Transform candidate, out Bounds bounds)
         {
             Renderer[] renderers = candidate == null
@@ -998,17 +1053,20 @@ namespace SortingFactory.Step4
             }
             physicalTarget.position += objectHoldPoint.position - center;
             physicalTarget.SetParent(objectHoldPoint, true);
+            physicalTargetAttached = true;
             return true;
         }
 
-        private void ReleasePhysicalTarget()
+        private void ReleasePhysicalTarget(bool resumeConveyorMotion)
         {
-            if (physicalTarget == null)
+            if (physicalTarget == null || !physicalTargetAttached)
             {
                 return;
             }
 
             physicalTarget.SetParent(originalTargetParent, true);
+            SplineConveyorObject conveyorObject = physicalTarget.GetComponent<
+                SplineConveyorObject>();
             if (heldBody != null)
             {
                 heldBody.detectCollisions = heldBodyDetectedCollisions;
@@ -1016,6 +1074,12 @@ namespace SortingFactory.Step4
                 heldBody.useGravity = true;
                 heldBody.linearVelocity = Vector3.zero;
                 heldBody.angularVelocity = Vector3.zero;
+            }
+
+            physicalTargetAttached = false;
+            if (resumeConveyorMotion && conveyorObject != null)
+            {
+                conveyorObject.ResumeConveyorMotionFromCurrentPosition();
             }
         }
 
@@ -1041,7 +1105,8 @@ namespace SortingFactory.Step4
                 surfaceBounds.max.y + objectBounds.extents.y + 0.08f,
                 surfaceBounds.center.z);
             physicalTarget.position += placementCenter - objectBounds.center;
-            ReleasePhysicalTarget();
+            ReleasePhysicalTarget(false);
+            ReleasePhysicalTargetClaim();
             return true;
         }
 
@@ -1137,6 +1202,12 @@ namespace SortingFactory.Step4
             Debug.LogWarning(
                 $"{workstation.ArmId} prototype grasp failed during {phase}: {reason} ({targetName}).",
                 this);
+            ReleasePhysicalTarget(true);
+            ReleasePhysicalTargetClaim();
+            if (leftFinger != null && rightFinger != null)
+            {
+                SetGripperBlend(0f);
+            }
             decisionController.SetMotionStatus(reason);
             decisionController.ReportGraspFailed(reason);
             SetPhase(MotionPhase.ReturnHome, reason);
@@ -1144,11 +1215,13 @@ namespace SortingFactory.Step4
 
         private void ClearTaskReferences()
         {
+            ReleasePhysicalTargetClaim();
             activeLogicalTargetId = -1;
             activeVisionTarget = null;
             physicalTarget = null;
             originalTargetParent = null;
             heldBody = null;
+            physicalTargetAttached = false;
         }
 
         private void SetPhase(MotionPhase nextPhase, string status)

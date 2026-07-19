@@ -1,6 +1,6 @@
 # Sorting Factory 自测记录
 
-本文档记录 Step 2 Camera Pipeline 和 Step 3 YOLO Tracking 的常用命令、Unity 操作和关键参数。
+本文档记录 Camera Pipeline、YOLO Tracking、机械臂抓取和 SO-101 CSV 的常用命令、Unity 操作和关键参数。
 
 ## 1. Python Server 首次安装
 
@@ -247,3 +247,35 @@ VISION_DEVICE=cpu python server.py
 2. 确认相机能清楚看到完整物体，而不是只看到 Workspace 或传送带。
 3. 使用真实或写实 3D 模型；纯色 Cylinder/Cube 很容易误判。
 4. 对项目特有的罐子、包装盒和工业零件，需要训练自定义数据集。
+
+## 12. Step 6-8 联合自测
+
+1. 退出并重新进入 Play Mode，确保 Unity 完成新脚本导入。
+2. 启动 Python Server，并在 Unity 点击 `Start All Streams`。
+3. 观察三台机械臂是否可以各自锁定目标；Busy 的机械臂不应接受第二个目标。
+4. 当两台机械臂可能匹配同一物理盒子时，只允许一台获得 `ConveyorPickClaim`。
+5. 正常成功流程应完成抓取、放入对应 Drop Zone、回零并恢复 `Idle`。
+6. 通过停止某台 Stream、遮挡目标或让目标离开 Workspace 测试真实失败；不使用随机失败注入。
+7. 失败后应释放目标锁定和物体占用，已夹起的物体应重新接回主传送带。
+8. 下游机械臂必须通过自己的相机重新检测该物体，不能复用上游 Track ID 或位置。
+9. 同时有两台或三台机械臂工作时，Console 会输出 Step 7 parallel operation 日志。
+
+每次进入 Play Mode 会自动创建一个 Run 文件夹：
+
+```text
+/Users/simon/Documents/WsmFiles/SortingFactoryScreenshots/csvdata/YYYY-MM-DD_HH-mm-ss-fff/
+```
+
+文件夹内应出现：
+
+```text
+arm_1.csv
+arm_2.csv
+arm_3.csv
+```
+
+每个文件以 `10 Hz` 写入 `frame` 行，并在抓取循环回零后追加一行 `episode` 汇总。当前只保存 CSV，不保存相机图片或视频。关节字段固定顺序为：
+
+```text
+shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper
+```

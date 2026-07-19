@@ -753,6 +753,11 @@ namespace SortingFactory.Step2
 
         private void HideWorkspaceVisualsFromCamera()
         {
+            if (!Application.isPlaying)
+            {
+                return;
+            }
+
             int workspaceVisualLayer = LayerMask.NameToLayer("Ignore Raycast");
             if (workspaceVisualLayer < 0)
             {

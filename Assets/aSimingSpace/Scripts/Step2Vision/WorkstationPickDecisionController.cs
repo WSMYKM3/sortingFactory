@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using SortingFactory.Phase1;
 using SortingFactory.Step2;
+using SortingFactory.Step8;
 using SplineMeshTools.Core;
 using UnityEngine;
 using UnityEngine.Splines;
@@ -40,6 +41,21 @@ namespace SortingFactory.Step4
         internal double LastUpdatedAt { get; set; }
     }
 
+    public sealed class GraspEpisodeSummary
+    {
+        public long Sequence { get; internal set; }
+        public string EpisodeId { get; internal set; }
+        public string ArmId { get; internal set; }
+        public string CameraId { get; internal set; }
+        public int LogicalTargetId { get; internal set; }
+        public string ClassName { get; internal set; }
+        public bool Succeeded { get; internal set; }
+        public string FailureReason { get; internal set; }
+        public float GraspDurationSeconds { get; internal set; }
+        public float CycleDurationSeconds { get; internal set; }
+        public double CompletedAt { get; internal set; }
+    }
+
     [DisallowMultipleComponent]
     [RequireComponent(typeof(WorkstationCameraController))]
     public sealed class WorkstationPickDecisionController : MonoBehaviour
@@ -50,7 +66,7 @@ namespace SortingFactory.Step4
         [SerializeField, Min(0.1f)] private float completeCycleTimeSeconds = 10f;
         [SerializeField] private bool useFastPrototypePickWindow = true;
 
-        [Header("Decision Simulation")]
+        [Header("Decision")]
         [SerializeField] private bool automaticallyLockExecutableTargets = true;
         [SerializeField, Min(0.5f)] private float completedEvaluationRetentionSeconds = 3f;
         [SerializeField, Min(0.25f)] private float latestPickLineHalfWidth = 1.25f;
@@ -75,6 +91,16 @@ namespace SortingFactory.Step4
         private double cycleCompletedAt;
         private bool externalMotionControllerActive;
         private PrototypeRobotArmIKController prototypeRobotController;
+        private So101CsvRecorder telemetryRecorder;
+        private long episodeSequence;
+        private long activeEpisodeSequence;
+        private string activeEpisodeId = string.Empty;
+        private int cycleTargetLogicalId = -1;
+        private string cycleTargetClass = string.Empty;
+        private string activeOutcome = string.Empty;
+        private string activeFailureReason = string.Empty;
+        private double attemptStartedAt;
+        private float activeGraspDuration;
 
         public WorkstationArmState ArmState { get; private set; } = WorkstationArmState.Idle;
         public float RequiredDecisionTime => requiredGraspTimeSeconds + safetyMarginSeconds;
@@ -89,6 +115,20 @@ namespace SortingFactory.Step4
         public int ActiveLogicalTargetId => activeLogicalTargetId;
         public bool ExternalMotionControllerActive => externalMotionControllerActive;
         public string MotionStatus { get; private set; } = "Decision controller ready";
+        public PrototypeRobotArmIKController PrototypeRobotController => prototypeRobotController;
+        public long ActiveEpisodeSequence => activeEpisodeSequence;
+        public string ActiveEpisodeId => activeEpisodeId;
+        public int CycleTargetLogicalId => cycleTargetLogicalId;
+        public string CycleTargetClass => cycleTargetClass;
+        public string ActiveOutcome => activeOutcome;
+        public string ActiveFailureReason => activeFailureReason;
+        public int TotalGraspAttemptCount { get; private set; }
+        public int SuccessfulGraspCount { get; private set; }
+        public int FailedGraspCount { get; private set; }
+        public int SkipCount { get; private set; }
+        public int PhysicalClaimConflictCount { get; private set; }
+
+        public event Action<GraspEpisodeSummary> EpisodeCompleted;
 
         public PickTargetEvaluation[] Evaluations
         {
@@ -158,7 +198,7 @@ namespace SortingFactory.Step4
             }
 
             double now = Time.unscaledTimeAsDouble;
-            UpdateSimulatedArmState(now);
+            UpdateArmStateFallback(now);
             EvaluateTargets(now, speed);
 
             if (hasPhysicalPickWindow)
@@ -225,12 +265,16 @@ namespace SortingFactory.Step4
             }
 
             double now = Time.unscaledTimeAsDouble;
+            activeOutcome = "success";
+            activeFailureReason = string.Empty;
+            activeGraspDuration = Mathf.Max(0f, (float)(now - attemptStartedAt));
+            SuccessfulGraspCount++;
             if (evaluations.TryGetValue(
                 activeLogicalTargetId,
                 out PickTargetEvaluation evaluation))
             {
                 evaluation.Decision = PickDecision.Completed;
-                evaluation.Reason = "Physical object attached to gripper";
+                evaluation.Reason = "Object placed in the correct drop zone";
                 evaluation.IsTerminal = true;
                 evaluation.LastUpdatedAt = now;
             }
@@ -242,13 +286,24 @@ namespace SortingFactory.Step4
 
         public void ReportGraspFailed(string reason)
         {
+            if (ArmState != WorkstationArmState.SecuringObject)
+            {
+                return;
+            }
+
             double now = Time.unscaledTimeAsDouble;
+            activeOutcome = "failed";
+            activeFailureReason = string.IsNullOrEmpty(reason)
+                ? "Physical grasp failed"
+                : reason;
+            activeGraspDuration = Mathf.Max(0f, (float)(now - attemptStartedAt));
+            FailedGraspCount++;
             if (evaluations.TryGetValue(
                 activeLogicalTargetId,
                 out PickTargetEvaluation evaluation))
             {
                 evaluation.Decision = PickDecision.Failed;
-                evaluation.Reason = string.IsNullOrEmpty(reason) ? "Physical grasp failed" : reason;
+                evaluation.Reason = activeFailureReason;
                 evaluation.IsTerminal = true;
                 evaluation.LastUpdatedAt = now;
             }
@@ -260,30 +315,79 @@ namespace SortingFactory.Step4
 
         public void ReportCycleCompleted()
         {
+            double now = Time.unscaledTimeAsDouble;
+            if (activeEpisodeSequence > 0)
+            {
+                EpisodeCompleted?.Invoke(new GraspEpisodeSummary
+                {
+                    Sequence = activeEpisodeSequence,
+                    EpisodeId = activeEpisodeId,
+                    ArmId = workstation == null ? string.Empty : workstation.ArmId,
+                    CameraId = workstation == null ? string.Empty : workstation.CameraId,
+                    LogicalTargetId = cycleTargetLogicalId,
+                    ClassName = cycleTargetClass,
+                    Succeeded = activeOutcome == "success",
+                    FailureReason = activeFailureReason,
+                    GraspDurationSeconds = activeGraspDuration,
+                    CycleDurationSeconds = Mathf.Max(0f, (float)(now - attemptStartedAt)),
+                    CompletedAt = now
+                });
+            }
+
             ArmState = WorkstationArmState.Idle;
             MotionStatus = "Robot ready";
+            activeEpisodeSequence = 0;
+            activeEpisodeId = string.Empty;
+            cycleTargetLogicalId = -1;
+            cycleTargetClass = string.Empty;
+            activeOutcome = string.Empty;
+            activeFailureReason = string.Empty;
+            activeGraspDuration = 0f;
+        }
+
+        public void ReportPhysicalClaimConflict()
+        {
+            PhysicalClaimConflictCount++;
         }
 
         private void EnsurePrototypeRobotController()
         {
-            if (prototypeRobotController != null || workstation.RobotMount == null)
+            if (workstation.RobotMount == null)
             {
                 return;
             }
 
-            Transform placeholder = workstation.RobotMount.Find("RobotArmPlaceholder_REPLACE_ME");
-            if (placeholder == null)
-            {
-                return;
-            }
-
-            prototypeRobotController = placeholder.GetComponent<PrototypeRobotArmIKController>();
             if (prototypeRobotController == null)
             {
-                prototypeRobotController = placeholder.gameObject.AddComponent<
+                Transform placeholder = workstation.RobotMount.Find(
+                    "RobotArmPlaceholder_REPLACE_ME");
+                if (placeholder == null)
+                {
+                    return;
+                }
+
+                prototypeRobotController = placeholder.GetComponent<
                     PrototypeRobotArmIKController>();
+                if (prototypeRobotController == null)
+                {
+                    prototypeRobotController = placeholder.gameObject.AddComponent<
+                        PrototypeRobotArmIKController>();
+                }
+                prototypeRobotController.Configure(this, cameraController, workstation);
             }
-            prototypeRobotController.Configure(this, cameraController, workstation);
+
+            if (telemetryRecorder == null)
+            {
+                telemetryRecorder = GetComponent<So101CsvRecorder>();
+                if (telemetryRecorder == null)
+                {
+                    telemetryRecorder = gameObject.AddComponent<So101CsvRecorder>();
+                }
+                telemetryRecorder.Configure(
+                    this,
+                    cameraController,
+                    prototypeRobotController);
+            }
         }
 
         private void RebuildPhysicalPickWindow()
@@ -498,7 +602,7 @@ namespace SortingFactory.Step4
 
             if (bestExecutable != null && automaticallyLockExecutableTargets)
             {
-                BeginSimulatedPick(bestExecutable, now);
+                BeginPick(bestExecutable, now);
             }
 
             RemoveExpiredEvaluations(currentIds, now);
@@ -526,7 +630,7 @@ namespace SortingFactory.Step4
             return evaluation;
         }
 
-        private void BeginSimulatedPick(PickTargetEvaluation evaluation, double now)
+        private void BeginPick(PickTargetEvaluation evaluation, double now)
         {
             if (!cameraController.TryLockTarget(
                 evaluation.LogicalTargetId,
@@ -539,13 +643,22 @@ namespace SortingFactory.Step4
 
             activeLogicalTargetId = evaluation.LogicalTargetId;
             ArmState = WorkstationArmState.SecuringObject;
+            activeEpisodeSequence = ++episodeSequence;
+            activeEpisodeId = $"{workstation.ArmId}_{activeEpisodeSequence:D6}";
+            cycleTargetLogicalId = evaluation.LogicalTargetId;
+            cycleTargetClass = evaluation.ClassName ?? string.Empty;
+            activeOutcome = "pending";
+            activeFailureReason = string.Empty;
+            activeGraspDuration = 0f;
+            attemptStartedAt = now;
+            TotalGraspAttemptCount++;
             graspSecuredAt = now + requiredGraspTimeSeconds;
             cycleCompletedAt = now + completeCycleTimeSeconds;
             evaluation.Decision = PickDecision.Execute;
-            evaluation.Reason = "Target locked; simulated grasp started";
+            evaluation.Reason = "Target locked; local grasp started";
         }
 
-        private void UpdateSimulatedArmState(double now)
+        private void UpdateArmStateFallback(double now)
         {
             if (externalMotionControllerActive)
             {
@@ -580,7 +693,9 @@ namespace SortingFactory.Step4
             List<int> expired = new List<int>();
             foreach (KeyValuePair<int, PickTargetEvaluation> pair in evaluations)
             {
-                if (pair.Key == activeLogicalTargetId || currentIds.Contains(pair.Key))
+                if (pair.Key == activeLogicalTargetId ||
+                    (activeEpisodeSequence > 0 && pair.Key == cycleTargetLogicalId) ||
+                    currentIds.Contains(pair.Key))
                 {
                     continue;
                 }
@@ -603,8 +718,12 @@ namespace SortingFactory.Step4
             evaluation.Reason = reason;
         }
 
-        private static void SetTerminalSkip(PickTargetEvaluation evaluation, string reason)
+        private void SetTerminalSkip(PickTargetEvaluation evaluation, string reason)
         {
+            if (!evaluation.IsTerminal)
+            {
+                SkipCount++;
+            }
             evaluation.Decision = PickDecision.Skip;
             evaluation.Reason = reason;
             evaluation.IsTerminal = true;
