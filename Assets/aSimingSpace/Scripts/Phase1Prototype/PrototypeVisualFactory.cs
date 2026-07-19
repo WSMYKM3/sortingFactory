@@ -45,21 +45,110 @@ namespace SortingFactory.Phase1
             Transform placeholder = new GameObject("RobotArmPlaceholder_REPLACE_ME").transform;
             placeholder.SetParent(robotMount, false);
 
-            CreatePrimitive("Base", PrimitiveType.Cylinder, placeholder, new Vector3(0f, 0.18f, 0f), new Vector3(0.72f, 0.18f, 0.72f), material, false);
-            CreatePrimitive("Pedestal", PrimitiveType.Cylinder, placeholder, new Vector3(0f, 0.72f, 0f), new Vector3(0.42f, 0.55f, 0.42f), material, false);
+            CreatePrimitive(
+                "Base",
+                PrimitiveType.Cylinder,
+                placeholder,
+                new Vector3(0f, 0.18f, 0f),
+                new Vector3(0.72f, 0.18f, 0.72f),
+                material,
+                false);
+            CreatePrimitive(
+                "BaseColumn",
+                PrimitiveType.Cylinder,
+                placeholder,
+                new Vector3(0f, 0.58f, 0f),
+                new Vector3(0.42f, 0.4f, 0.42f),
+                material,
+                false);
 
-            Vector3 shoulder = new Vector3(0f, 1.25f, 0f);
-            Vector3 elbow = new Vector3(-0.55f, 2.05f, 0f);
-            Vector3 wrist = new Vector3(-1.35f, 2.15f, 0f);
-            CreateJoint("Shoulder", placeholder, shoulder, 0.32f, material);
-            CreateLink("UpperArm", placeholder, shoulder, elbow, 0.22f, material);
-            CreateJoint("Elbow", placeholder, elbow, 0.26f, material);
-            CreateLink("Forearm", placeholder, elbow, wrist, 0.18f, material);
-            CreateJoint("Wrist", placeholder, wrist, 0.2f, material);
+            Transform shoulderPan = CreateNode(
+                "shoulder_pan",
+                placeholder,
+                new Vector3(0f, 0.84f, 0f));
+            CreatePrimitive(
+                "shoulder_pan_housing",
+                PrimitiveType.Cylinder,
+                shoulderPan,
+                Vector3.zero,
+                new Vector3(0.38f, 0.16f, 0.38f),
+                material,
+                false);
 
-            CreatePrimitive("GripperPalm", PrimitiveType.Cube, placeholder, wrist + new Vector3(-0.22f, 0f, 0f), new Vector3(0.36f, 0.16f, 0.34f), material, false);
-            CreatePrimitive("GripperLeft", PrimitiveType.Cube, placeholder, wrist + new Vector3(-0.42f, -0.12f, -0.13f), new Vector3(0.32f, 0.12f, 0.08f), material, false);
-            CreatePrimitive("GripperRight", PrimitiveType.Cube, placeholder, wrist + new Vector3(-0.42f, -0.12f, 0.13f), new Vector3(0.32f, 0.12f, 0.08f), material, false);
+            Transform shoulderLift = CreateNode(
+                "shoulder_lift",
+                shoulderPan,
+                new Vector3(0f, 0.38f, 0f));
+            CreateJoint("shoulder_lift_housing", shoulderLift, Vector3.zero, 0.29f, material);
+
+            Vector3 elbowOffset = new Vector3(-0.62f, 0.78f, 0f);
+            CreateLink("UpperArm", shoulderLift, Vector3.zero, elbowOffset, 0.2f, material);
+            Transform elbowFlex = CreateNode("elbow_flex", shoulderLift, elbowOffset);
+            CreateJoint("elbow_flex_housing", elbowFlex, Vector3.zero, 0.25f, material);
+
+            Vector3 wristFlexOffset = new Vector3(-0.76f, 0.12f, 0f);
+            CreateLink("Forearm", elbowFlex, Vector3.zero, wristFlexOffset, 0.17f, material);
+            Transform wristFlex = CreateNode("wrist_flex", elbowFlex, wristFlexOffset);
+            CreateJoint("wrist_flex_housing", wristFlex, Vector3.zero, 0.19f, material);
+
+            Vector3 wristRollOffset = new Vector3(-0.28f, 0f, 0f);
+            CreateLink("WristLink", wristFlex, Vector3.zero, wristRollOffset, 0.14f, material);
+            Transform wristRoll = CreateNode("wrist_roll", wristFlex, wristRollOffset);
+            Transform wristRollHousing = CreatePrimitive(
+                "wrist_roll_housing",
+                PrimitiveType.Cylinder,
+                wristRoll,
+                Vector3.zero,
+                new Vector3(0.17f, 0.15f, 0.17f),
+                material,
+                false);
+            wristRollHousing.localRotation = Quaternion.Euler(0f, 0f, 90f);
+
+            CreatePrimitive(
+                "GripperPalm",
+                PrimitiveType.Cube,
+                wristRoll,
+                new Vector3(-0.19f, 0f, 0f),
+                new Vector3(0.32f, 0.16f, 0.34f),
+                material,
+                false);
+            Transform gripperLeft = CreatePrimitive(
+                "GripperLeft",
+                PrimitiveType.Cube,
+                wristRoll,
+                new Vector3(-0.43f, -0.1f, -0.13f),
+                new Vector3(0.34f, 0.11f, 0.08f),
+                material,
+                false);
+            Transform gripperRight = CreatePrimitive(
+                "GripperRight",
+                PrimitiveType.Cube,
+                wristRoll,
+                new Vector3(-0.43f, -0.1f, 0.13f),
+                new Vector3(0.34f, 0.11f, 0.08f),
+                material,
+                false);
+
+            Transform gripPoint = CreateNode(
+                "GripPoint",
+                wristRoll,
+                new Vector3(-0.52f, -0.1f, 0f));
+            Transform objectHoldPoint = CreateNode(
+                "ObjectHoldPoint",
+                gripPoint,
+                Vector3.zero);
+
+            So101RobotArmRig rig = placeholder.gameObject.AddComponent<So101RobotArmRig>();
+            rig.Configure(
+                shoulderPan,
+                shoulderLift,
+                elbowFlex,
+                wristFlex,
+                wristRoll,
+                gripPoint,
+                objectHoldPoint,
+                gripperLeft,
+                gripperRight);
         }
 
         public static void CreateDropZone(Transform parent, Material material)
@@ -217,6 +306,19 @@ namespace SortingFactory.Phase1
         private static void CreateBar(Transform parent, Vector3 position, Vector3 scale, Material material)
         {
             CreatePrimitive("DebugEdge", PrimitiveType.Cube, parent, position, scale, material, false);
+        }
+
+        private static Transform CreateNode(
+            string name,
+            Transform parent,
+            Vector3 localPosition)
+        {
+            Transform node = new GameObject(name).transform;
+            node.SetParent(parent, false);
+            node.localPosition = localPosition;
+            node.localRotation = Quaternion.identity;
+            node.localScale = Vector3.one;
+            return node;
         }
 
         private static Transform CreatePrimitive(

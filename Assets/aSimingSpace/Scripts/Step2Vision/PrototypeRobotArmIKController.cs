@@ -53,6 +53,8 @@ namespace SortingFactory.Step4
         private Transform shoulderPivot;
         private Transform elbowPivot;
         private Transform wristPivot;
+        private Transform wristFlexPivot;
+        private Transform wristRollPivot;
         private Transform gripPoint;
         private Transform objectHoldPoint;
         private Transform leftFinger;
@@ -64,6 +66,8 @@ namespace SortingFactory.Step4
         private float baseYawAngle;
         private float shoulderAngle;
         private float elbowAngle;
+        private float wristFlexAngle;
+        private float wristRollAngle;
         private float gripperBlend;
         private float phaseElapsed;
         private float resolveElapsed;
@@ -79,6 +83,7 @@ namespace SortingFactory.Step4
         private MotionPhase phase = MotionPhase.Idle;
         private bool configured;
         private bool rigBuilt;
+        private bool usesSo101Rig;
 
         public string MotionState => phase.ToString();
         public string HeldObjectName => physicalTarget == null ? string.Empty : physicalTarget.name;
@@ -393,11 +398,15 @@ namespace SortingFactory.Step4
             baseYawAngle = Mathf.MoveTowards(baseYawAngle, 0f, maxStep);
             shoulderAngle = Mathf.MoveTowards(shoulderAngle, 0f, maxStep);
             elbowAngle = Mathf.MoveTowards(elbowAngle, 0f, maxStep);
+            wristFlexAngle = Mathf.MoveTowards(wristFlexAngle, 0f, maxStep);
+            wristRollAngle = Mathf.MoveTowards(wristRollAngle, 0f, maxStep);
             ApplyJointRotations();
 
             if (Mathf.Abs(baseYawAngle) <= 0.1f &&
                 Mathf.Abs(shoulderAngle) <= 0.1f &&
-                Mathf.Abs(elbowAngle) <= 0.1f)
+                Mathf.Abs(elbowAngle) <= 0.1f &&
+                Mathf.Abs(wristFlexAngle) <= 0.1f &&
+                Mathf.Abs(wristRollAngle) <= 0.1f)
             {
                 ClearTaskReferences();
                 decisionController.ReportCycleCompleted();
@@ -411,14 +420,17 @@ namespace SortingFactory.Step4
             float maxStep = jointRotationSpeed * deltaTime / iterations;
             for (int iteration = 0; iteration < iterations; iteration++)
             {
-                RotateJointTowards(
-                    baseYawPivot,
-                    Vector3.up,
-                    worldTarget,
-                    ref baseYawAngle,
-                    -165f,
-                    165f,
-                    maxStep);
+                if (usesSo101Rig)
+                {
+                    RotateJointTowards(
+                        wristFlexPivot,
+                        Vector3.forward,
+                        worldTarget,
+                        ref wristFlexAngle,
+                        -105f,
+                        105f,
+                        maxStep);
+                }
                 RotateJointTowards(
                     elbowPivot,
                     Vector3.forward,
@@ -434,6 +446,14 @@ namespace SortingFactory.Step4
                     ref shoulderAngle,
                     -115f,
                     115f,
+                    maxStep);
+                RotateJointTowards(
+                    baseYawPivot,
+                    Vector3.up,
+                    worldTarget,
+                    ref baseYawAngle,
+                    -165f,
+                    165f,
                     maxStep);
             }
         }
@@ -467,6 +487,18 @@ namespace SortingFactory.Step4
             baseYawPivot.localRotation = Quaternion.AngleAxis(baseYawAngle, Vector3.up);
             shoulderPivot.localRotation = Quaternion.AngleAxis(shoulderAngle, Vector3.forward);
             elbowPivot.localRotation = Quaternion.AngleAxis(elbowAngle, Vector3.forward);
+            if (wristFlexPivot != null)
+            {
+                wristFlexPivot.localRotation = Quaternion.AngleAxis(
+                    wristFlexAngle,
+                    Vector3.forward);
+            }
+            if (wristRollPivot != null)
+            {
+                wristRollPivot.localRotation = Quaternion.AngleAxis(
+                    wristRollAngle,
+                    Vector3.right);
+            }
         }
 
         private bool BuildRigHierarchy()
@@ -476,12 +508,33 @@ namespace SortingFactory.Step4
                 return true;
             }
 
+            So101RobotArmRig so101Rig = GetComponent<So101RobotArmRig>();
+            if (so101Rig != null && !so101Rig.NeedsUpgrade)
+            {
+                baseYawPivot = so101Rig.ShoulderPan;
+                shoulderPivot = so101Rig.ShoulderLift;
+                elbowPivot = so101Rig.ElbowFlex;
+                wristFlexPivot = so101Rig.WristFlex;
+                wristRollPivot = so101Rig.WristRoll;
+                wristPivot = wristRollPivot;
+                gripPoint = so101Rig.GripPoint;
+                objectHoldPoint = so101Rig.ObjectHoldPoint;
+                leftFinger = so101Rig.GripperLeft;
+                rightFinger = so101Rig.GripperRight;
+                usesSo101Rig = true;
+                rigBuilt = true;
+                CacheFingerPositions();
+                return true;
+            }
+
             baseYawPivot = transform.Find("IK_BaseYaw");
             if (baseYawPivot != null)
             {
                 shoulderPivot = baseYawPivot.Find("IK_Shoulder");
                 elbowPivot = shoulderPivot == null ? null : shoulderPivot.Find("IK_Elbow");
                 wristPivot = elbowPivot == null ? null : elbowPivot.Find("IK_Wrist");
+                wristFlexPivot = null;
+                wristRollPivot = null;
                 gripPoint = wristPivot == null ? null : wristPivot.Find("GripPoint");
                 objectHoldPoint = gripPoint == null ? null : gripPoint.Find("ObjectHoldPoint");
                 if (gripPoint != null && objectHoldPoint == null)
@@ -557,6 +610,7 @@ namespace SortingFactory.Step4
                 gripPosition,
                 Quaternion.identity);
             CacheFingerPositions();
+            usesSo101Rig = false;
             rigBuilt = true;
             return true;
         }

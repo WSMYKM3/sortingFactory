@@ -26,6 +26,13 @@ namespace SortingFactory.Editor
                 {
                     ConveyorLoopSceneBuilder.BuildLoop(true);
                 }
+
+                if (GUILayout.Button("Upgrade Placeholder Arms to SO-101", GUILayout.Height(26f)))
+                {
+                    Phase1SceneBuilder.UpgradePlaceholderArmsToSo101(
+                        (Phase1SceneSetup)target,
+                        true);
+                }
             }
         }
     }
@@ -76,6 +83,20 @@ namespace SortingFactory.Editor
             }
 
             ReplaceExistingPickables(setup, true);
+            Selection.activeGameObject = setup.gameObject;
+        }
+
+        [MenuItem("Tools/Sorting Factory/Upgrade Placeholder Arms to SO-101")]
+        public static void UpgradePlaceholderArmsFromMenu()
+        {
+            Phase1SceneSetup setup = Object.FindFirstObjectByType<Phase1SceneSetup>();
+            if (setup == null)
+            {
+                Debug.LogError("Open MainScene before upgrading the placeholder robot arms.");
+                return;
+            }
+
+            UpgradePlaceholderArmsToSo101(setup, true);
             Selection.activeGameObject = setup.gameObject;
         }
 
@@ -139,6 +160,35 @@ namespace SortingFactory.Editor
             SceneView.RepaintAll();
         }
 
+        public static void UpgradePlaceholderArmsToSo101(
+            Phase1SceneSetup setup,
+            bool registerUndo)
+        {
+            if (setup == null || EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                return;
+            }
+
+            if (registerUndo)
+            {
+                Undo.RegisterFullObjectHierarchyUndo(
+                    setup.gameObject,
+                    "Upgrade Placeholder Arms to SO-101");
+            }
+
+            int upgradedCount = setup.UpgradePlaceholderRobotArmsToSo101();
+            if (upgradedCount == 0)
+            {
+                return;
+            }
+
+            EditorUtility.SetDirty(setup);
+            EditorSceneManager.MarkSceneDirty(setup.gameObject.scene);
+            EditorSceneManager.SaveScene(setup.gameObject.scene);
+            SceneView.RepaintAll();
+            Debug.Log($"Upgraded {upgradedCount} placeholder robot arms to the SO-101 joint hierarchy.", setup);
+        }
+
         private static void BuildMissingMainSceneContent()
         {
             if (EditorApplication.isPlayingOrWillChangePlaymode)
@@ -159,6 +209,8 @@ namespace SortingFactory.Editor
                 setup.GetComponentInChildren<WorkstationCameraController>(true) == null;
             bool needsDetectionBoxes = setup != null &&
                 NeedsDetectionBoxUpgrade(setup);
+            bool needsSo101Arms = setup != null &&
+                setup.NeedsSo101RobotArmUpgrade;
             if (setup != null &&
                 (!setup.HasSceneContent ||
                  needsSortingArea ||
@@ -170,6 +222,11 @@ namespace SortingFactory.Editor
             else if (needsDetectionBoxes)
             {
                 ReplaceExistingPickables(setup, false);
+            }
+
+            if (setup != null && needsSo101Arms)
+            {
+                UpgradePlaceholderArmsToSo101(setup, false);
             }
         }
 

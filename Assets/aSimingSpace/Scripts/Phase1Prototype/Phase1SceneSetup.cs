@@ -59,6 +59,36 @@ namespace SortingFactory.Phase1
         public bool HasSceneContent => transform.Find(SceneContentRootName) != null;
         public bool NeedsGeneratedContentUpgrade =>
             generatedContentVersion < CurrentGeneratedContentVersion;
+        public bool NeedsSo101RobotArmUpgrade
+        {
+            get
+            {
+                if (robotArmPrefab != null || !HasSceneContent)
+                {
+                    return false;
+                }
+
+                foreach (RobotWorkstation workstation in
+                    GetComponentsInChildren<RobotWorkstation>(true))
+                {
+                    Transform robotMount = workstation.RobotMount != null
+                        ? workstation.RobotMount
+                        : workstation.transform.Find("RobotMount");
+                    Transform placeholder = robotMount == null
+                        ? null
+                        : robotMount.Find("RobotArmPlaceholder_REPLACE_ME");
+                    So101RobotArmRig rig = placeholder == null
+                        ? null
+                        : placeholder.GetComponent<So101RobotArmRig>();
+                    if (placeholder != null && (rig == null || rig.NeedsUpgrade))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
 
         private void Awake()
         {
@@ -103,6 +133,57 @@ namespace SortingFactory.Phase1
             detectionObjectClasses = classNames;
             detectionLabelMaterials = labelMaterials;
             detectionBoxBodyMaterial = bodyMaterial;
+        }
+
+        public int UpgradePlaceholderRobotArmsToSo101()
+        {
+            if (robotArmPrefab != null || Application.isPlaying)
+            {
+                return 0;
+            }
+
+            int upgradedCount = 0;
+            foreach (RobotWorkstation workstation in
+                GetComponentsInChildren<RobotWorkstation>(true))
+            {
+                Transform robotMount = workstation.RobotMount != null
+                    ? workstation.RobotMount
+                    : workstation.transform.Find("RobotMount");
+                Transform placeholder = robotMount == null
+                    ? null
+                    : robotMount.Find("RobotArmPlaceholder_REPLACE_ME");
+                if (placeholder == null)
+                {
+                    continue;
+                }
+
+                So101RobotArmRig rig = placeholder.GetComponent<So101RobotArmRig>();
+                if (rig != null && !rig.NeedsUpgrade)
+                {
+                    continue;
+                }
+
+                Renderer sourceRenderer = placeholder.GetComponentInChildren<Renderer>(true);
+                Material material = sourceRenderer == null
+                    ? null
+                    : sourceRenderer.sharedMaterial;
+                Vector3 localPosition = placeholder.localPosition;
+                Quaternion localRotation = placeholder.localRotation;
+                Vector3 localScale = placeholder.localScale;
+
+                DestroyImmediate(placeholder.gameObject);
+                PrototypeVisualFactory.CreatePlaceholderRobot(robotMount, material);
+                Transform upgraded = robotMount.Find("RobotArmPlaceholder_REPLACE_ME");
+                if (upgraded != null)
+                {
+                    upgraded.localPosition = localPosition;
+                    upgraded.localRotation = localRotation;
+                    upgraded.localScale = localScale;
+                }
+                upgradedCount++;
+            }
+
+            return upgradedCount;
         }
 
         public Transform BuildSceneContent()
