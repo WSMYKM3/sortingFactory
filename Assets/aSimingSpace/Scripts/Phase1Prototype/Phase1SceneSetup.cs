@@ -44,7 +44,7 @@ namespace SortingFactory.Phase1
 
         public const string SceneContentRootName = "Phase1 Scene Content";
         public const int CurrentGeneratedContentVersion = 2;
-        public const float DetectionBoxReleaseInterval = 2.4f;
+        public const float DetectionBoxReleaseInterval = 1.2f;
 
         public GameObject RobotArmPrefab => robotArmPrefab;
         public float ConveyorObjectSpeed => conveyorRunning ? conveyorObjectSpeed : 0f;
