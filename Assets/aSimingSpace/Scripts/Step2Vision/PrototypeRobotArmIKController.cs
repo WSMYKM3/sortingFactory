@@ -198,7 +198,7 @@ namespace SortingFactory.Step4
             activeVisionTarget = cameraController.LockedTarget;
             physicalTarget = null;
             resolveElapsed = 0f;
-            SetPhase(MotionPhase.ResolvingTarget, $"Resolving physical L#{activeLogicalTargetId}");
+            SetPhase(MotionPhase.ResolvingTarget, $"Resolving visual L#{activeLogicalTargetId}");
         }
 
         private void UpdateResolvingTarget(float deltaTime)
@@ -209,34 +209,43 @@ namespace SortingFactory.Step4
                 activeVisionTarget = cameraController.LockedTarget;
             }
 
-            physicalTarget = ResolvePhysicalTarget(activeLogicalTargetId, activeVisionTarget);
-            if (physicalTarget != null)
+            if (activeVisionTarget == null || !activeVisionTarget.HasConveyorPosition)
             {
-                if (!TryAcquirePhysicalTargetClaim())
+                if (resolveElapsed >= 1.25f)
                 {
-                    decisionController.ReportPhysicalClaimConflict();
-                    string owner = physicalClaim == null
-                        ? "another arm"
-                        : physicalClaim.OwnerArmId;
-                    FailCurrentTask($"Physical object is already claimed by {owner}");
-                    return;
+                    FailCurrentTask("Detected target has no conveyor position");
                 }
-
-                SetPhase(MotionPhase.Approach, $"Approaching {physicalTarget.name}");
                 return;
             }
 
-            if (resolveElapsed >= 1.25f)
+            physicalTarget = ResolvePhysicalTarget(activeLogicalTargetId, activeVisionTarget);
+            if (physicalTarget == null)
             {
-                FailCurrentTask("No pickable object matched the detection");
+                if (resolveElapsed >= 1.25f)
+                {
+                    FailCurrentTask("Detected image has no movable parent object");
+                }
+                return;
             }
+
+            if (!TryAcquirePhysicalTargetClaim())
+            {
+                decisionController.ReportPhysicalClaimConflict();
+                string owner = physicalClaim == null
+                    ? "another arm"
+                    : physicalClaim.OwnerArmId;
+                FailCurrentTask($"Detected object is already claimed by {owner}");
+                return;
+            }
+
+            SetPhase(MotionPhase.Approach, $"Approaching {GetTargetDisplayName()}");
         }
 
         private void UpdateApproach(float deltaTime)
         {
             if (!TryGetPhysicalTargetCenter(out Vector3 center))
             {
-                FailCurrentTask("Physical target disappeared before approach");
+                FailCurrentTask("Detected object's parent disappeared before approach");
                 return;
             }
 
@@ -264,7 +273,7 @@ namespace SortingFactory.Step4
         {
             if (!TryGetPhysicalTargetCenter(out Vector3 center))
             {
-                FailCurrentTask("Physical target disappeared during descent");
+                FailCurrentTask("Detected object's parent disappeared during descent");
                 return;
             }
 
@@ -302,7 +311,7 @@ namespace SortingFactory.Step4
 
             if (!AttachPhysicalTarget())
             {
-                FailCurrentTask("Gripper closed without attaching a physical object");
+                FailCurrentTask("Gripper could not attach the detected object's parent");
                 return;
             }
 
@@ -311,14 +320,14 @@ namespace SortingFactory.Step4
                 placementGestureTarget = BuildPlacementGestureTarget();
                 SetPhase(
                     MotionPhase.PlacementGesture,
-                    $"Carrying {physicalTarget.name} toward drop zone");
+                    $"Carrying {GetTargetDisplayName()} toward drop zone");
                 return;
             }
 
             decisionController.ReportGraspSucceeded();
             liftTarget = gripPoint.position + Vector3.up * liftHeight;
             dropTransportHeight = liftTarget.y;
-            SetPhase(MotionPhase.Lift, $"Lifting {physicalTarget.name}");
+            SetPhase(MotionPhase.Lift, $"Lifting {GetTargetDisplayName()}");
         }
 
         private void UpdatePlacementGesture(float deltaTime)
@@ -338,6 +347,7 @@ namespace SortingFactory.Step4
                 FailCurrentTask("Could not place the attached object in the drop zone");
                 return;
             }
+            ReleasePhysicalTargetClaim();
 
             decisionController.ReportGraspSucceeded();
             SetGripperBlend(0f);
@@ -704,7 +714,8 @@ namespace SortingFactory.Step4
                 {
                     Transform candidate = GetPickableRoot(hit.collider);
                     if (IsKnownPickableTarget(candidate) &&
-                        IsEligiblePhysicalTarget(candidate, null))
+                        IsEligiblePhysicalTarget(candidate, null) &&
+                        MatchesDetectedClassWhenKnown(candidate, displayDetection.class_name))
                     {
                         return candidate;
                     }
@@ -765,13 +776,16 @@ namespace SortingFactory.Step4
                 FindObjectsByType<DetectionLabeledBox>(FindObjectsSortMode.None))
             {
                 Transform candidate = labeledBox.transform;
-                if (!IsEligiblePhysicalTarget(candidate, null) ||
-                    !TryGetRendererBounds(candidate, out Bounds bounds))
+                Renderer labelRenderer = labeledBox.LabelRenderer;
+                if (!labeledBox.MatchesVisionClass(detection.class_name) ||
+                    !IsEligiblePhysicalTarget(candidate, null) ||
+                    labelRenderer == null)
                 {
                     continue;
                 }
 
-                Vector3 viewportPosition = stationCamera.WorldToViewportPoint(bounds.center);
+                Vector3 viewportPosition = stationCamera.WorldToViewportPoint(
+                    labelRenderer.bounds.center);
                 if (viewportPosition.z <= 0f)
                 {
                     continue;
@@ -780,42 +794,9 @@ namespace SortingFactory.Step4
                 float score = Vector2.Distance(
                     detectionCenter,
                     new Vector2(viewportPosition.x, viewportPosition.y));
-                if (!labeledBox.MatchesVisionClass(detection.class_name))
-                {
-                    score += 0.08f;
-                }
-
                 if (score <= bestScore)
                 {
                     bestScore = score;
-                    bestCandidate = candidate;
-                }
-            }
-
-            foreach (SplineConveyorObject conveyorObject in
-                FindObjectsByType<SplineConveyorObject>(FindObjectsSortMode.None))
-            {
-                Transform candidate = conveyorObject.transform;
-                if (!conveyorObject.IsFollowingConveyor ||
-                    candidate.GetComponent<DetectionLabeledBox>() != null ||
-                    !IsEligiblePhysicalTarget(candidate, null) ||
-                    !TryGetRendererBounds(candidate, out Bounds bounds))
-                {
-                    continue;
-                }
-
-                Vector3 viewportPosition = stationCamera.WorldToViewportPoint(bounds.center);
-                if (viewportPosition.z <= 0f)
-                {
-                    continue;
-                }
-
-                float screenDistance = Vector2.Distance(
-                    detectionCenter,
-                    new Vector2(viewportPosition.x, viewportPosition.y));
-                if (screenDistance <= bestScore)
-                {
-                    bestScore = screenDistance;
                     bestCandidate = candidate;
                 }
             }
@@ -835,11 +816,15 @@ namespace SortingFactory.Step4
             Transform candidate,
             string detectedClass)
         {
+            if (string.IsNullOrEmpty(detectedClass))
+            {
+                return true;
+            }
+
             DetectionLabeledBox labeledBox = candidate == null
                 ? null
                 : candidate.GetComponent<DetectionLabeledBox>();
-            return labeledBox == null || string.IsNullOrEmpty(detectedClass) ||
-                labeledBox.MatchesVisionClass(detectedClass);
+            return labeledBox != null && labeledBox.MatchesVisionClass(detectedClass);
         }
 
         private Transform GetPickableRoot(Collider collider)
@@ -968,6 +953,18 @@ namespace SortingFactory.Step4
             }
             center = bounds.center;
             return true;
+        }
+
+        private string GetTargetDisplayName()
+        {
+            if (physicalTarget != null)
+            {
+                return physicalTarget.name;
+            }
+
+            return activeVisionTarget == null || string.IsNullOrEmpty(activeVisionTarget.ClassName)
+                ? $"visual target L#{activeLogicalTargetId}"
+                : activeVisionTarget.ClassName;
         }
 
         private static bool TryGetPhysicalBounds(Transform candidate, out Bounds bounds)

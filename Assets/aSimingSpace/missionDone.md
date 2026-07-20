@@ -220,6 +220,7 @@ Assets/aSimingSpace/selfTest.md
 - Latest Pick Line 会投影到对应相机画面，不是只存在于 UI 中的任意线条。
 - 每个持续跟踪目标会计算剩余可抓取时间、是否越过最晚抓取线以及 `Execute / Skip` 决策。
 - 当前预设抓取时间为 `1.25 s`，安全余量为 `0.25 s`，最低决策时间合计 `1.50 s`。
+- 只有当前检测置信度达到 `45%` 的目标才允许进入 `Execute`；低置信度目标继续等待，不能触发抓取。
 - 目标在开始抓取前越过 Latest Pick Line 时会被跳过；已经锁定并开始的任务不会因越线而中止。
 - 检测结果支持确认、短时 coasting、丢失和跳过状态，减少单帧漏检造成的决策跳变。
 - Runtime 调试面板能够显示 Latest Pick Line、目标状态、剩余时间、所需时间和决策原因。
@@ -227,7 +228,8 @@ Assets/aSimingSpace/selfTest.md
 ## Step 5：目标锁定和本地抓取循环
 
 - 满足条件的目标会被锁定，机械臂进入 Busy/Securing 状态并暂时忽略其他目标。
-- 已实现从检测框匹配传送带物体、接近目标、下降、闭合夹爪、携带物体、放入 Drop Zone 和回零。
+- 目标由检测框和图片 Quad 确认；执行动画时使用 Quad 所属的 `DetectionLabeledBox` 根对象作为临时可移动载体。
+- 机械臂接近根对象中心，并把整个父级绑定到夹爪后再执行放置；无法解析或绑定父级时不能把该次动作记录为成功。
 - 抓取后的物体绑定到机械臂末端 `ObjectHoldPoint`，移动期间暂停原传送带驱动和刚体碰撞。
 - 当前可靠原型采用短距离放置动作后将已抓取物体稳定放入对应 Drop Zone，再让机械臂回到初始姿态。
 - 三个 Drop Zone 已放大并增加约束碰撞体，降低物体落在区域外的概率。
@@ -238,7 +240,7 @@ Assets/aSimingSpace/selfTest.md
 ## Step 6：真实失败恢复和下游重新检测
 
 - 不注入随机或人工 `simulated_grasp_failure`，只处理正常运行中真实发生的失败。
-- 已统一处理目标无法匹配、目标消失、IK 无法到达、夹取未附着和放置失败。
+- 已统一处理图片父级无法解析、目标消失、IK 无法到达、夹取未附着和放置失败。
 - 失败后会释放 Camera Target Lock、物理物体占用和夹爪状态，并让机械臂回零恢复 `Idle`。
 - 已夹起但失败的物体会解绑，并重新投影到主传送带最近位置继续运动。
 - 当前工位会把失败 Evaluation 标记为终态，不使用旧位置再次创建同一任务。
@@ -259,6 +261,7 @@ Assets/aSimingSpace/selfTest.md
 - CSV 根目录为 `/Users/simon/Documents/WsmFiles/SortingFactoryScreenshots/csvdata`。
 - 当前只保存 CSV，不保存相机图片或视频。
 - 以 `10 Hz` 记录 `frame` 行，并在每次机械臂回零后写入 `episode` 汇总行。
+- `unity_time_s` 保留整次运行的连续时间；`episode_time_s` 在每次抓取周期首次记录时从 `0` 开始，Idle 行留空。
 - Observation 和 Action 均使用 `shoulder_pan / shoulder_lift / elbow_flex / wrist_flex / wrist_roll / gripper` 固定顺序。
 - 同时记录 Arm/Camera ID、时间戳、相机帧号、工作流状态、检测和 Track 信息、世界位置、时间判断、Execute/Skip、结果、失败原因及循环耗时。
 - 当前占位机械臂是运动学驱动，因此 Observation 与该帧 Action 可能相同；字段已经分离，之后可直接接真实 SO-101 状态反馈。

@@ -248,6 +248,12 @@ VISION_DEVICE=cpu python server.py
 3. 使用真实或写实 3D 模型；纯色 Cylinder/Cube 很容易误判。
 4. 对项目特有的罐子、包装盒和工业零件，需要训练自定义数据集。
 
+### 低置信度目标不抓取
+
+1. 抓取置信度门槛为 `45%`。
+2. 低于门槛的检测可以显示 Bounding Box，但机械臂必须保持 Waiting，不能进入 `Execute`。
+3. 检测对象是图片 Quad；当前模拟抓取必须绑定 Quad 所属的 `DetectionLabeledBox` 根对象，不能朝预测点空抓或在没有载体时记录成功。
+
 ## 12. Step 6-8 联合自测
 
 1. 退出并重新进入 Play Mode，确保 Unity 完成新脚本导入。
@@ -275,6 +281,9 @@ arm_3.csv
 ```
 
 每个文件以 `10 Hz` 写入 `frame` 行，并在抓取循环回零后追加一行 `episode` 汇总。当前只保存 CSV，不保存相机图片或视频。关节字段固定顺序为：
+
+- `unity_time_s`：当前 Play Mode 的连续运行时间。
+- `episode_time_s`：当前 `episode_id` 的相对时间；首帧为 `0`，Idle 行为空，下一个抓取周期重新从 `0` 开始。
 
 ```text
 shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper

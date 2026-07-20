@@ -68,6 +68,7 @@ namespace SortingFactory.Step4
 
         [Header("Decision")]
         [SerializeField] private bool automaticallyLockExecutableTargets = true;
+        [SerializeField, Range(0f, 1f)] private float minimumGrabConfidence = 0.45f;
         [SerializeField, Min(0.5f)] private float completedEvaluationRetentionSeconds = 3f;
         [SerializeField, Min(0.25f)] private float latestPickLineHalfWidth = 1.25f;
 
@@ -582,6 +583,15 @@ namespace SortingFactory.Step4
                 if (target.State != PersistentVisionTargetState.Confirmed)
                 {
                     SetWaiting(evaluation, "Waiting for confirmed detection");
+                    continue;
+                }
+
+                if (target.Confidence + 0.0001f < minimumGrabConfidence)
+                {
+                    SetWaiting(
+                        evaluation,
+                        $"Detection confidence {target.Confidence:P0} is below the " +
+                        $"{minimumGrabConfidence:P0} grab threshold");
                     continue;
                 }
 

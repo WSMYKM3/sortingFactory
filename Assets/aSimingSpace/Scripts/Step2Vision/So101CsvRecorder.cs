@@ -16,7 +16,7 @@ namespace SortingFactory.Step8
 
         private const string Header =
             "record_type,run_id,episode_id,arm_id,camera_id,utc_timestamp," +
-            "unity_time_s,camera_frame_id," +
+            "unity_time_s,episode_time_s,camera_frame_id," +
             "observation_shoulder_pan,observation_shoulder_lift," +
             "observation_elbow_flex,observation_wrist_flex," +
             "observation_wrist_roll,observation_gripper," +
@@ -38,6 +38,8 @@ namespace SortingFactory.Step8
         private StreamWriter writer;
         private float nextSampleTime;
         private float nextFlushTime;
+        private string timedEpisodeId = string.Empty;
+        private double timedEpisodeStartedAt;
         private bool configured;
 
         public string RunId => GetRunId();
@@ -147,8 +149,8 @@ namespace SortingFactory.Step8
                 decisionController.ActiveEpisodeId,
                 target,
                 evaluation);
-            row[36] = decisionController.ActiveOutcome;
-            row[37] = decisionController.ActiveFailureReason;
+            row[37] = decisionController.ActiveOutcome;
+            row[38] = decisionController.ActiveFailureReason;
             writer.WriteLine(JoinCsv(row));
             FrameRecordCount++;
         }
@@ -167,13 +169,13 @@ namespace SortingFactory.Step8
                 summary.EpisodeId,
                 null,
                 evaluation);
-            row[24] = summary.LogicalTargetId.ToString(CultureInfo.InvariantCulture);
-            row[26] = summary.ClassName;
-            row[36] = summary.Succeeded ? "success" : "failed";
-            row[37] = summary.FailureReason;
-            row[38] = Format(summary.GraspDurationSeconds);
-            row[39] = Format(summary.CycleDurationSeconds);
-            row[40] = summary.Succeeded ? "true" : "false";
+            row[25] = summary.LogicalTargetId.ToString(CultureInfo.InvariantCulture);
+            row[27] = summary.ClassName;
+            row[37] = summary.Succeeded ? "success" : "failed";
+            row[38] = summary.FailureReason;
+            row[39] = Format(summary.GraspDurationSeconds);
+            row[40] = Format(summary.CycleDurationSeconds);
+            row[41] = summary.Succeeded ? "true" : "false";
             writer.WriteLine(JoinCsv(row));
             writer.Flush();
             EpisodeRecordCount++;
@@ -191,6 +193,7 @@ namespace SortingFactory.Step8
             float wristFlex = robotController == null ? 0f : robotController.WristFlexPosition;
             float wristRoll = robotController == null ? 0f : robotController.WristRollPosition;
             float gripper = robotController == null ? 0f : robotController.GripperPosition;
+            string episodeTime = GetEpisodeTime(episodeId);
             Vector3 worldPosition = target == null || !target.HasConveyorPosition
                 ? Vector3.zero
                 : target.PredictedBeltPosition;
@@ -204,6 +207,7 @@ namespace SortingFactory.Step8
                 cameraController.CameraId,
                 DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
                 Format(Time.unscaledTime),
+                episodeTime,
                 cameraController.CapturedFrameCount.ToString(CultureInfo.InvariantCulture),
                 Format(pan), Format(lift), Format(elbow), Format(wristFlex),
                 Format(wristRoll), Format(gripper),
@@ -235,6 +239,26 @@ namespace SortingFactory.Step8
                 string.Empty,
                 string.Empty
             };
+        }
+
+        private string GetEpisodeTime(string episodeId)
+        {
+            if (string.IsNullOrEmpty(episodeId))
+            {
+                timedEpisodeId = string.Empty;
+                timedEpisodeStartedAt = 0d;
+                return string.Empty;
+            }
+
+            double now = Time.unscaledTimeAsDouble;
+            if (!string.Equals(timedEpisodeId, episodeId, StringComparison.Ordinal))
+            {
+                timedEpisodeId = episodeId;
+                timedEpisodeStartedAt = now;
+                return Format(0f);
+            }
+
+            return Format((float)Math.Max(0d, now - timedEpisodeStartedAt));
         }
 
         private PersistentVisionTarget FindCurrentTarget()

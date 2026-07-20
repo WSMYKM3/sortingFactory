@@ -15,6 +15,7 @@ namespace SortingFactory.Phase1
         [SerializeField, HideInInspector] private int visualVersion;
 
         public string DetectionClass => detectionClass;
+        public Renderer LabelRenderer => labelRenderer;
         public bool NeedsVisualUpgrade => visualVersion < CurrentVisualVersion;
 
         public bool MatchesVisionClass(string className)
