@@ -309,9 +309,21 @@ namespace SortingFactory.Step4
                 return;
             }
 
+            if (!ValidatePhysicalTargetBeforeAttach(out string validationFailure))
+            {
+                FailCurrentTask(validationFailure);
+                return;
+            }
+
             if (!AttachPhysicalTarget())
             {
                 FailCurrentTask("Gripper could not attach the detected object's parent");
+                return;
+            }
+
+            if (!VerifyPhysicalTargetAttached())
+            {
+                FailCurrentTask("Detected object's parent did not remain attached to the gripper");
                 return;
             }
 
@@ -332,6 +344,12 @@ namespace SortingFactory.Step4
 
         private void UpdatePlacementGesture(float deltaTime)
         {
+            if (!VerifyPhysicalTargetAttached())
+            {
+                FailCurrentTask("Detected object's parent detached from the gripper");
+                return;
+            }
+
             SolveIkTowards(placementGestureTarget, deltaTime);
             if (phaseElapsed < placementGestureDuration)
             {
@@ -683,12 +701,14 @@ namespace SortingFactory.Step4
             PersistentVisionTarget visionTarget)
         {
             Camera stationCamera = cameraController.GetComponent<Camera>();
-            VisionDetectionResult displayDetection = Array.Find(
-                cameraController.DisplayDetections,
-                detection => detection.track_id == logicalTargetId);
-            if (displayDetection == null && visionTarget != null)
+            VisionDetectionResult displayDetection = visionTarget == null
+                ? null
+                : visionTarget.BuildDisplayDetection(1.5f);
+            if (displayDetection == null)
             {
-                displayDetection = visionTarget.BuildDisplayDetection(1.5f);
+                displayDetection = Array.Find(
+                    cameraController.DisplayDetections,
+                    detection => detection.track_id == logicalTargetId);
             }
             if (stationCamera != null && displayDetection != null)
             {
@@ -791,9 +811,13 @@ namespace SortingFactory.Step4
                     continue;
                 }
 
-                float score = Vector2.Distance(
-                    detectionCenter,
-                    new Vector2(viewportPosition.x, viewportPosition.y));
+                Vector2 candidateCenter = new Vector2(
+                    viewportPosition.x,
+                    viewportPosition.y);
+                float score = Mathf.Abs(candidateCenter.x - detectionCenter.x) /
+                        Mathf.Max(0.01f, detection.bbox_width) +
+                    Mathf.Abs(candidateCenter.y - detectionCenter.y) /
+                        Mathf.Max(0.01f, detection.bbox_height);
                 if (score <= bestScore)
                 {
                     bestScore = score;
@@ -802,6 +826,32 @@ namespace SortingFactory.Step4
             }
 
             return bestCandidate;
+        }
+
+        private bool ValidatePhysicalTargetBeforeAttach(out string failureReason)
+        {
+            failureReason = string.Empty;
+            if (physicalTarget == null || activeVisionTarget == null)
+            {
+                failureReason = "Locked detection has no selected physical object";
+                return false;
+            }
+
+            if (!MatchesDetectedClassWhenKnown(
+                    physicalTarget,
+                    activeVisionTarget.ClassName))
+            {
+                failureReason = "Selected physical object no longer matches the detected class";
+                return false;
+            }
+
+            if (!IsEligiblePhysicalTarget(physicalTarget, activeVisionTarget))
+            {
+                failureReason = "Selected physical object left the conveyor before attachment";
+                return false;
+            }
+
+            return true;
         }
 
         private static bool IsKnownPickableTarget(Transform candidate)
@@ -1051,6 +1101,18 @@ namespace SortingFactory.Step4
             physicalTarget.position += objectHoldPoint.position - center;
             physicalTarget.SetParent(objectHoldPoint, true);
             physicalTargetAttached = true;
+            return true;
+        }
+
+        private bool VerifyPhysicalTargetAttached()
+        {
+            if (!physicalTargetAttached || physicalTarget == null ||
+                objectHoldPoint == null || physicalTarget.parent != objectHoldPoint ||
+                heldBody == null || !heldBody.isKinematic)
+            {
+                return false;
+            }
+
             return true;
         }
 

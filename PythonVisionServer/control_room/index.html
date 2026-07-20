@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sorting Factory Control Room</title>
+  <link rel="stylesheet" href="/control-room-assets/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">SORTING FACTORY</p>
+      <h1>Control Room</h1>
+    </div>
+    <div class="connection"><span id="unity-dot" class="status-dot"></span><span id="unity-status">UNITY OFFLINE</span></div>
+  </header>
+
+  <main>
+    <section class="control-strip" aria-label="Runtime controls">
+      <div class="control-group session-controls">
+        <span class="group-label">SESSION</span>
+        <button id="start-session" class="primary">Start Session</button>
+        <button id="stop-session">Stop Session</button>
+        <strong id="session-state">INACTIVE</strong>
+        <span id="session-time">00:00</span>
+      </div>
+
+      <div class="control-group conveyor-controls">
+        <span class="group-label">CONVEYOR</span>
+        <button id="conveyor-toggle">Pause</button>
+        <input id="conveyor-speed" type="range" min="0" max="2" step="0.05" value="0.5" aria-label="Conveyor speed">
+        <output id="conveyor-speed-value">0.50 u/s</output>
+      </div>
+
+      <div class="control-group bulk-controls">
+        <span class="group-label">SYSTEM</span>
+        <button id="enable-arms">Enable Arms</button>
+        <button id="disable-arms">Disable Arms</button>
+        <button id="start-streams">Start Streams</button>
+        <button id="stop-streams">Stop Streams</button>
+      </div>
+    </section>
+
+    <section class="metrics-band" aria-label="Factory metrics">
+      <div><span>ACTIVE ARMS</span><strong id="metric-active-arms">0</strong></div>
+      <div><span>STREAMS</span><strong id="metric-streams">0 / 3</strong></div>
+      <div><span>VISION ONLINE</span><strong id="metric-vision">0 / 3</strong></div>
+      <div><span>ATTEMPTS</span><strong id="metric-attempts">0</strong></div>
+      <div><span>SUCCESSFUL</span><strong id="metric-successes">0</strong></div>
+      <div><span>FAILED</span><strong id="metric-failures">0</strong></div>
+      <div><span>SUCCESS RATE</span><strong id="metric-success">N/A</strong></div>
+      <div><span>SKIPPED</span><strong id="metric-skips">0</strong></div>
+      <div><span>AVG TASK</span><strong id="metric-task-time">0.00s</strong></div>
+      <div><span>THROUGHPUT</span><strong id="metric-throughput">0.0/min</strong></div>
+    </section>
+
+    <section id="arm-grid" class="arm-grid" aria-label="Robotic arm workstations"></section>
+  </main>
+
+  <template id="arm-template">
+    <article class="arm-panel">
+      <header class="arm-header">
+        <div><span class="status-dot arm-dot"></span><h2></h2></div>
+        <div class="arm-actions">
+          <button class="arm-enable"></button>
+          <button class="stream-toggle"></button>
+        </div>
+      </header>
+      <div class="camera-frame">
+        <img alt="Live workstation camera">
+        <div class="camera-empty">NO CAMERA FRAME</div>
+        <span class="camera-badge"></span>
+      </div>
+      <div class="state-line"><strong class="workflow"></strong><span class="motion"></span></div>
+      <dl class="target-data">
+        <div><dt>TARGET</dt><dd class="target"></dd></div>
+        <div><dt>DECISION</dt><dd class="decision"></dd></div>
+        <div><dt>LAST FAILURE</dt><dd class="failure"></dd></div>
+      </dl>
+      <div class="arm-metrics">
+        <div><span>SUCCESS</span><strong class="success-count"></strong></div>
+        <div><span>FAILED</span><strong class="failure-count"></strong></div>
+        <div><span>ATTEMPTS</span><strong class="attempt-count"></strong></div>
+        <div><span>SKIPPED</span><strong class="skip-count"></strong></div>
+        <div><span>RATE</span><strong class="success-rate"></strong></div>
+        <div><span>AVG GRASP</span><strong class="grasp-time"></strong></div>
+        <div><span>AVG CYCLE</span><strong class="cycle-time"></strong></div>
+        <div><span>UTILIZATION</span><strong class="utilization"></strong></div>
+        <div><span>THROUGHPUT</span><strong class="throughput"></strong></div>
+      </div>
+    </article>
+  </template>
+
+  <script src="/control-room-assets/app.js"></script>
+</body>
+</html>

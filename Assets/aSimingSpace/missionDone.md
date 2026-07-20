@@ -1,8 +1,8 @@
 # Sorting Factory 已完成任务
 
-更新日期：2026-07-19
+更新日期：2026-07-20
 
-当前进度：**Step 1-Step 5 已实现；Step 6-Step 8 已联合完成代码实现和编译验证，等待退出当前 Play Mode 后进行三机械臂端到端运行验收。**
+当前进度：**Step 1-Step 10 已完成代码实现；Step 9 localhost Control Room 与 Step 10 Session Controls 已通过 API 和编译验证，等待 Unity Play Mode 端到端运行验收。**
 
 ## Step 1：多机械臂传送带场景
 
@@ -257,14 +257,31 @@ Assets/aSimingSpace/selfTest.md
 
 ## Step 8：SO-101 CSV 数据记录
 
-- 每次进入 Play Mode 自动创建统一 Run ID，三台机械臂分别写入 `arm_1.csv`、`arm_2.csv` 和 `arm_3.csv`。
+- 点击 `Start Session` 后创建统一 Session ID，三台机械臂分别写入 `arm_1.csv`、`arm_2.csv` 和 `arm_3.csv`。
 - CSV 根目录为 `/Users/simon/Documents/WsmFiles/SortingFactoryScreenshots/csvdata`。
 - 当前只保存 CSV，不保存相机图片或视频。
 - 以 `10 Hz` 记录 `frame` 行，并在每次机械臂回零后写入 `episode` 汇总行。
-- `unity_time_s` 保留整次运行的连续时间；`episode_time_s` 在每次抓取周期首次记录时从 `0` 开始，Idle 行留空。
+- `unity_time_s` 保留 Play Mode 连续时间，`session_time_s` 从 Session 开始计时；`episode_time_s` 在每次抓取周期首次记录时从 `0` 开始，Idle 行留空。
 - Observation 和 Action 均使用 `shoulder_pan / shoulder_lift / elbow_flex / wrist_flex / wrist_roll / gripper` 固定顺序。
 - 同时记录 Arm/Camera ID、时间戳、相机帧号、工作流状态、检测和 Track 信息、世界位置、时间判断、Execute/Skip、结果、失败原因及循环耗时。
 - 当前占位机械臂是运动学驱动，因此 Observation 与该帧 Action 可能相同；字段已经分离，之后可直接接真实 SO-101 状态反馈。
+
+## Step 9：Localhost Control Room
+
+- FastAPI 在 `http://127.0.0.1:8000/control-room` 提供本地控制室。
+- 页面显示三台机械臂的实时 Camera、Vision 状态、工作状态、目标、决策、最近失败原因和分 Arm KPI。
+- 全局区域显示活跃机械臂、Camera Stream、Vision 连接、尝试/成功/失败/Skip、成功率、平均任务时间和吞吐量。
+- 页面通过 REST Control State 与 Unity 交换控制和 Telemetry，不参与本地目标锁定、位置传递或抓取决策。
+- 提供全局及单 Arm 的 Enable/Disable 和 Camera Stream 开关。
+- Conveyor Run/Pause 与 Runtime 速度 Slider 已接入 `Phase1SceneSetup`，暂停时保留配置速度。
+
+## Step 10：Session Controls
+
+- `Start Session` 独立负责创建 Session ID、清零 Session 计数、开始计时和启动三份 CSV；不会自动启动传送带、机械臂或 Camera Stream。
+- `Stop Session` 先禁止新抓取任务，等待正在执行的机械臂完成并回到 Idle，再停止记录。
+- 每个 Session 文件夹保存 `arm_1.csv`、`arm_2.csv`、`arm_3.csv`、`metadata.csv` 和 `session_summary.csv`。
+- Metadata 记录 Session 时间、传送带速度与状态，以及每台 Arm、Camera Stream 和 Vision 的起始状态。
+- Summary 记录尝试、成功、失败、Skip、成功率、平均抓取/周期时间及吞吐量；停止后 Control Room 保留最终结果。
 
 ## 主要实现文件
 
@@ -286,7 +303,10 @@ Assets/aSimingSpace/selfTest.md
 | `ConveyorPickClaim.cs` | 防止多台机械臂同时处理同一物理物体 |
 | `MultiRobotOperationMonitor.cs` | 统计三机械臂活跃数、并发峰值和占用冲突 |
 | `So101CsvRecorder.cs` | 每台机械臂的 SO-101 frame/episode CSV 记录 |
+| `FactoryControlRoomController.cs` | Unity Control Room 同步、Session 生命周期、Telemetry 和汇总 |
 | `PythonVisionServer/server.py` | FastAPI WebSocket 和 HTTP Server |
+| `PythonVisionServer/control_room_state.py` | 线程安全的独立运行控制状态 |
+| `PythonVisionServer/control_room/` | localhost Control Room HTML、CSS 和 JavaScript |
 | `PythonVisionServer/protocol.py` | Python 帧协议解析和验证 |
 | `PythonVisionServer/tests/test_protocol.py` | Protocol 单元测试 |
 | `PythonVisionServer/vision_service.py` | YOLO26n、ROI 过滤和分相机 ByteTrack |
@@ -301,18 +321,17 @@ Assets/aSimingSpace/selfTest.md
 - 正常运行中真实失败的安全恢复和下游重新检测运行验证。
 - 三台 Camera Stream 同时开启时的并行抓取运行验收。
 - 检查实际生成的三份 SO-101 CSV 内容和 episode 汇总行。
-- Step 9 localhost 控制室。
-- Step 10 Session Controls。
 
 随机或人工注入的 `simulated_grasp_failure` 已从当前任务范围移除，不再实现失败概率、随机失败开关或相关 UI。真实运行失败仍需按 Step 6 安全处理。
 
 ## 下一阶段
 
-退出当前 Play Mode 并重新进入后，按 `selfTest.md` 的 Step 6-8 联合自测流程进行验收。验收通过后进入 **Step 9: Build a Localhost Control Room**。
+退出当前 Play Mode 并重新进入后，按 `selfTest.md` 的 Step 6-10 流程进行验收。之后再评估任务书中 Step 11 及以后的内容；当前没有合并这些后续步骤。
 
 ```text
 Three local camera streams
 -> Independent detection and grasp cycles
 -> Real failure recovery and downstream re-detection
--> Per-arm SO-101 CSV records
+-> Localhost monitoring and independent runtime controls
+-> Explicit Session-based SO-101 CSV records and summary
 ```

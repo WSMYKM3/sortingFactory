@@ -4,6 +4,7 @@ using Unity.Mathematics;
 using SortingFactory.Step2;
 using SortingFactory.Step4;
 using SortingFactory.Step7;
+using SortingFactory.Step9;
 
 namespace SortingFactory.Phase1
 {
@@ -39,13 +40,16 @@ namespace SortingFactory.Phase1
         [SerializeField, HideInInspector] private int generatedContentVersion;
 
         private SplineContainer mainConveyorPath;
+        private bool conveyorRunning = true;
 
         public const string SceneContentRootName = "Phase1 Scene Content";
         public const int CurrentGeneratedContentVersion = 2;
         public const float DetectionBoxReleaseInterval = 2.4f;
 
         public GameObject RobotArmPrefab => robotArmPrefab;
-        public float ConveyorObjectSpeed => conveyorObjectSpeed;
+        public float ConveyorObjectSpeed => conveyorRunning ? conveyorObjectSpeed : 0f;
+        public float ConfiguredConveyorObjectSpeed => conveyorObjectSpeed;
+        public bool IsConveyorRunning => conveyorRunning;
         public SplineContainer ConveyorPath
         {
             get
@@ -105,6 +109,11 @@ namespace SortingFactory.Phase1
             {
                 gameObject.AddComponent<MultiRobotOperationMonitor>();
             }
+
+            if (GetComponent<FactoryControlRoomController>() == null)
+            {
+                gameObject.AddComponent<FactoryControlRoomController>();
+            }
         }
 
         public void SetConveyorObjectSpeed(float speed)
@@ -116,6 +125,17 @@ namespace SortingFactory.Phase1
             }
 
             conveyorObjectSpeed = clampedSpeed;
+            ApplyConveyorObjectSpeed();
+        }
+
+        public void SetConveyorRunning(bool running)
+        {
+            if (conveyorRunning == running)
+            {
+                return;
+            }
+
+            conveyorRunning = running;
             ApplyConveyorObjectSpeed();
         }
 
@@ -530,22 +550,23 @@ namespace SortingFactory.Phase1
 
         private void ApplyConveyorObjectSpeed()
         {
+            float effectiveSpeed = ConveyorObjectSpeed;
             foreach (SortingAreaFeedObject feedObject in
                 FindObjectsByType<SortingAreaFeedObject>(FindObjectsSortMode.None))
             {
-                feedObject.SetConveyorSpeed(conveyorObjectSpeed);
+                feedObject.SetConveyorSpeed(effectiveSpeed);
             }
 
             foreach (SplineConveyorObject conveyorObject in
                 FindObjectsByType<SplineConveyorObject>(FindObjectsSortMode.None))
             {
-                conveyorObject.SetConveyorSpeed(conveyorObjectSpeed);
+                conveyorObject.SetConveyorSpeed(effectiveSpeed);
             }
 
             foreach (ClosedLoopConveyorMover conveyorMover in
                 FindObjectsByType<ClosedLoopConveyorMover>(FindObjectsSortMode.None))
             {
-                conveyorMover.SetConveyorSpeed(conveyorObjectSpeed);
+                conveyorMover.SetConveyorSpeed(effectiveSpeed);
             }
         }
 

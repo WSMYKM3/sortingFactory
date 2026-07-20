@@ -9,9 +9,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import Response
+from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 
+from control_room_state import ControlRoomState
 from protocol import FrameProtocolError, decode_frame_packet
 from vision_service import (
     COCO_CLASS_NAMES,
@@ -34,6 +36,7 @@ FRAME_DIR = APP_DIR / "received_frames"
 SAFE_ID = re.compile(r"[^a-zA-Z0-9_-]+")
 DEFAULT_CAMERA_IDS = ("arm_1_camera", "arm_2_camera", "arm_3_camera")
 vision_service = VisionService(APP_DIR)
+control_room_state = ControlRoomState()
 
 
 @asynccontextmanager
@@ -47,6 +50,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 camera_stats: dict[str, dict[str, Any]] = {}
+CONTROL_ROOM_DIR = APP_DIR / "control_room"
+app.mount(
+    "/control-room-assets",
+    StaticFiles(directory=CONTROL_ROOM_DIR),
+    name="control-room-assets",
+)
 
 
 def safe_camera_id(camera_id: str) -> str:
@@ -54,6 +63,44 @@ def safe_camera_id(camera_id: str) -> str:
     if not safe_id:
         raise FrameProtocolError("camera_id cannot be used as a file name")
     return safe_id
+
+
+@app.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    return RedirectResponse(url="/control-room")
+
+
+@app.get("/control-room", include_in_schema=False)
+async def control_room() -> FileResponse:
+    return FileResponse(CONTROL_ROOM_DIR / "index.html")
+
+
+@app.get("/api/control")
+async def get_control_state() -> dict[str, Any]:
+    return control_room_state.controls()
+
+
+@app.post("/api/control")
+async def update_control_state(
+    command: dict[str, Any] = Body(...),
+) -> dict[str, Any]:
+    try:
+        return control_room_state.apply(command)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/telemetry")
+async def update_unity_telemetry(
+    telemetry: dict[str, Any] = Body(...),
+) -> dict[str, bool]:
+    control_room_state.update_telemetry(telemetry)
+    return {"received": True}
+
+
+@app.get("/api/control-room")
+async def control_room_dashboard() -> dict[str, Any]:
+    return control_room_state.dashboard(camera_stats)
 
 
 @app.get("/health")

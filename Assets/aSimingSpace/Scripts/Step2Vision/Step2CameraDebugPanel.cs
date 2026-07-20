@@ -121,7 +121,7 @@ namespace SortingFactory.Step2
                 return;
             }
 
-            float currentSpeed = phase1SceneSetup.ConveyorObjectSpeed;
+            float currentSpeed = phase1SceneSetup.ConfiguredConveyorObjectSpeed;
             float requestedSpeed = GUI.HorizontalSlider(
                 new Rect(190f, 471f, 226f, 20f),
                 currentSpeed,

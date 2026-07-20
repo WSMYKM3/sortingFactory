@@ -21,12 +21,27 @@ normalized workspace ROI. The server crops that ROI before inference, remaps
 boxes to the full frame, and filters implausible boxes larger than 70% of the
 image area.
 
+Open the local control room after the server starts:
+
+```text
+http://127.0.0.1:8000/control-room
+```
+
+The Session, conveyor, robotic-arm, and camera-stream controls are independent.
+`Start Session` starts counters, timing, and CSV recording; it does not start the
+conveyor, enable arms, or start camera streams. `Stop Session` blocks new grasp
+tasks, lets active cycles return to Idle, and then writes the Session summary.
+
 ## Endpoints
 
 - `GET http://127.0.0.1:8000/health`
 - `GET http://127.0.0.1:8000/classes`
 - `GET http://127.0.0.1:8000/stats`
 - `GET http://127.0.0.1:8000/latest/arm_1_camera`
+- `GET http://127.0.0.1:8000/api/control`
+- `POST http://127.0.0.1:8000/api/control`
+- `GET http://127.0.0.1:8000/api/control-room`
+- `POST http://127.0.0.1:8000/api/telemetry`
 
 `/classes` returns all 80 supported COCO labels. `/stats` reports per-camera
 frame count, inference time, and detection count.

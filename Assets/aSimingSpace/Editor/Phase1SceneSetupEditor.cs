@@ -270,11 +270,14 @@ namespace SortingFactory.Editor
             for (int index = 0; index < DetectionClasses.Length; index++)
             {
                 string className = DetectionClasses[index];
+                string photoFileName = className == "banana"
+                    ? "banana 1"
+                    : className == "orange" ? "orange 1" : className;
                 Texture2D photo = AssetDatabase.LoadAssetAtPath<Texture2D>(
-                    $"{ObjectPhotoFolder}/{className}.png");
+                    $"{ObjectPhotoFolder}/{photoFileName}.png");
                 if (photo == null)
                 {
-                    Debug.LogError($"Missing YOLO object photo: {className}.png");
+                    Debug.LogError($"Missing YOLO object photo: {photoFileName}.png");
                     continue;
                 }
 

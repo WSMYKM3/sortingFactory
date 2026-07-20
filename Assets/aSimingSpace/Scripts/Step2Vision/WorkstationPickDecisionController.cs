@@ -102,6 +102,8 @@ namespace SortingFactory.Step4
         private string activeFailureReason = string.Empty;
         private double attemptStartedAt;
         private float activeGraspDuration;
+        private bool operationalEnabled = true;
+        private bool sessionAcceptingTasks = true;
 
         public WorkstationArmState ArmState { get; private set; } = WorkstationArmState.Idle;
         public float RequiredDecisionTime => requiredGraspTimeSeconds + safetyMarginSeconds;
@@ -128,6 +130,23 @@ namespace SortingFactory.Step4
         public int FailedGraspCount { get; private set; }
         public int SkipCount { get; private set; }
         public int PhysicalClaimConflictCount { get; private set; }
+        public int CompletedEpisodeCount { get; private set; }
+        public float TotalGraspDurationSeconds { get; private set; }
+        public float TotalCycleDurationSeconds { get; private set; }
+        public string LastFailureReason { get; private set; } = string.Empty;
+        public bool IsOperationalEnabled => operationalEnabled;
+        public bool IsDisablePending => !operationalEnabled && ArmState != WorkstationArmState.Idle;
+        public bool CanAcceptNewTargets => operationalEnabled && sessionAcceptingTasks &&
+            ArmState == WorkstationArmState.Idle;
+        public float SuccessRate => TotalGraspAttemptCount <= 0
+            ? 0f
+            : (float)SuccessfulGraspCount / TotalGraspAttemptCount;
+        public float AverageGraspDurationSeconds => CompletedEpisodeCount <= 0
+            ? 0f
+            : TotalGraspDurationSeconds / CompletedEpisodeCount;
+        public float AverageCycleDurationSeconds => CompletedEpisodeCount <= 0
+            ? 0f
+            : TotalCycleDurationSeconds / CompletedEpisodeCount;
 
         public event Action<GraspEpisodeSummary> EpisodeCompleted;
 
@@ -258,6 +277,52 @@ namespace SortingFactory.Step4
             MotionStatus = string.IsNullOrEmpty(status) ? "Robot motion active" : status;
         }
 
+        public void SetOperationalEnabled(bool enabled)
+        {
+            operationalEnabled = enabled;
+            if (!enabled && ArmState == WorkstationArmState.Idle)
+            {
+                MotionStatus = "Arm disabled";
+            }
+            else if (enabled && ArmState == WorkstationArmState.Idle)
+            {
+                MotionStatus = "Robot ready";
+            }
+        }
+
+        public void SetSessionAcceptingTasks(bool accepting)
+        {
+            sessionAcceptingTasks = accepting;
+        }
+
+        public bool ResetSessionCounters()
+        {
+            if (ArmState != WorkstationArmState.Idle)
+            {
+                return false;
+            }
+
+            evaluations.Clear();
+            episodeSequence = 0;
+            activeEpisodeSequence = 0;
+            activeEpisodeId = string.Empty;
+            cycleTargetLogicalId = -1;
+            cycleTargetClass = string.Empty;
+            activeOutcome = string.Empty;
+            activeFailureReason = string.Empty;
+            activeGraspDuration = 0f;
+            TotalGraspAttemptCount = 0;
+            SuccessfulGraspCount = 0;
+            FailedGraspCount = 0;
+            SkipCount = 0;
+            PhysicalClaimConflictCount = 0;
+            CompletedEpisodeCount = 0;
+            TotalGraspDurationSeconds = 0f;
+            TotalCycleDurationSeconds = 0f;
+            LastFailureReason = string.Empty;
+            return true;
+        }
+
         public void ReportGraspSucceeded()
         {
             if (ArmState != WorkstationArmState.SecuringObject)
@@ -297,6 +362,7 @@ namespace SortingFactory.Step4
             activeFailureReason = string.IsNullOrEmpty(reason)
                 ? "Physical grasp failed"
                 : reason;
+            LastFailureReason = activeFailureReason;
             activeGraspDuration = Mathf.Max(0f, (float)(now - attemptStartedAt));
             FailedGraspCount++;
             if (evaluations.TryGetValue(
@@ -317,8 +383,12 @@ namespace SortingFactory.Step4
         public void ReportCycleCompleted()
         {
             double now = Time.unscaledTimeAsDouble;
+            float cycleDuration = Mathf.Max(0f, (float)(now - attemptStartedAt));
             if (activeEpisodeSequence > 0)
             {
+                CompletedEpisodeCount++;
+                TotalGraspDurationSeconds += activeGraspDuration;
+                TotalCycleDurationSeconds += cycleDuration;
                 EpisodeCompleted?.Invoke(new GraspEpisodeSummary
                 {
                     Sequence = activeEpisodeSequence,
@@ -330,13 +400,13 @@ namespace SortingFactory.Step4
                     Succeeded = activeOutcome == "success",
                     FailureReason = activeFailureReason,
                     GraspDurationSeconds = activeGraspDuration,
-                    CycleDurationSeconds = Mathf.Max(0f, (float)(now - attemptStartedAt)),
+                    CycleDurationSeconds = cycleDuration,
                     CompletedAt = now
                 });
             }
 
             ArmState = WorkstationArmState.Idle;
-            MotionStatus = "Robot ready";
+            MotionStatus = operationalEnabled ? "Robot ready" : "Arm disabled";
             activeEpisodeSequence = 0;
             activeEpisodeId = string.Empty;
             cycleTargetLogicalId = -1;
@@ -592,6 +662,18 @@ namespace SortingFactory.Step4
                         evaluation,
                         $"Detection confidence {target.Confidence:P0} is below the " +
                         $"{minimumGrabConfidence:P0} grab threshold");
+                    continue;
+                }
+
+                if (!operationalEnabled)
+                {
+                    SetWaiting(evaluation, "Robotic arm is disabled");
+                    continue;
+                }
+
+                if (!sessionAcceptingTasks)
+                {
+                    SetWaiting(evaluation, "Session is stopping");
                     continue;
                 }
 

@@ -22,6 +22,8 @@ python3 -m pip install -r requirements.txt
 
 ## 2. 每次启动 Python Server
 
+YOLO 检测、ByteTrack、Health API 和 localhost Control Room 已合并在同一个 FastAPI Server 中，只需要运行下面这一组命令一次：
+
 ```bash
 cd /Users/simon/Documents/UnityProjects/sortingFactory/PythonVisionServer
 source .venv/bin/activate
@@ -33,6 +35,16 @@ python server.py
 ```text
 Uvicorn running on http://127.0.0.1:8000
 ```
+
+同一个 `8000` 端口同时提供：
+
+```text
+YOLO Camera WebSocket: ws://127.0.0.1:8000/ws/camera
+Control Room:          http://127.0.0.1:8000/control-room
+Health API:            http://127.0.0.1:8000/health
+```
+
+不需要为 Control Room 再启动第二个 Python Server，也不要让两个进程同时占用 `8000`。
 
 运行期间不要关闭这个 Terminal。停止 Server 使用：
 
@@ -146,7 +158,7 @@ PYTHONPATH=PythonVisionServer PythonVisionServer/.venv/bin/python \
   -m unittest discover -s PythonVisionServer/tests -v
 ```
 
-当前共有 10 个协议、ROI、坐标映射、过滤和连续性测试，全部显示 `ok` 才算通过。
+当前共有 13 个 Control Room、协议、ROI、坐标映射、过滤和连续性测试，全部显示 `ok` 才算通过。
 
 ## 8. Step 2 关键参数
 
@@ -266,7 +278,7 @@ VISION_DEVICE=cpu python server.py
 8. 下游机械臂必须通过自己的相机重新检测该物体，不能复用上游 Track ID 或位置。
 9. 同时有两台或三台机械臂工作时，Console 会输出 Step 7 parallel operation 日志。
 
-每次进入 Play Mode 会自动创建一个 Run 文件夹：
+只有在 localhost Control Room 点击 `Start Session` 后，才会创建 Session 文件夹：
 
 ```text
 /Users/simon/Documents/WsmFiles/SortingFactoryScreenshots/csvdata/YYYY-MM-DD_HH-mm-ss-fff/
@@ -278,13 +290,31 @@ VISION_DEVICE=cpu python server.py
 arm_1.csv
 arm_2.csv
 arm_3.csv
+metadata.csv
+session_summary.csv（Stop Session 后生成）
 ```
 
 每个文件以 `10 Hz` 写入 `frame` 行，并在抓取循环回零后追加一行 `episode` 汇总。当前只保存 CSV，不保存相机图片或视频。关节字段固定顺序为：
 
 - `unity_time_s`：当前 Play Mode 的连续运行时间。
+- `session_time_s`：从本次 Session 开始计算的连续时间。
 - `episode_time_s`：当前 `episode_id` 的相对时间；首帧为 `0`，Idle 行为空，下一个抓取周期重新从 `0` 开始。
 
 ```text
 shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper
 ```
+
+## 13. Step 9-10 Control Room 与 Session 自测
+
+1. 启动 Python Server，浏览器打开 `http://127.0.0.1:8000/control-room`。
+2. 进入 Unity Play Mode，页面右上角应在约 3 秒内显示 `UNITY ONLINE`。
+3. `Start Streams / Stop Streams` 只控制三台 Camera Stream，也可在每个 Arm 面板单独切换。
+4. `Enable Arms / Disable Arms` 只控制机械臂接收新任务；Busy 状态下 Disable 会先完成当前循环再停用。
+5. Conveyor 的 `Run / Pause` 和速度 Slider 只控制传送带，暂停时保留 Slider 设定速度。
+6. 点击 `Start Session`，状态应从 `WAITINGTOSTART` 进入 `RECORDING`，计时器从零开始，计数器清零并开始写 CSV。
+7. Session 不会自动开启传送带、机械臂或 Camera Stream，这些开关保持独立。
+8. 点击 `Stop Session` 后，系统停止接收新抓取任务；正在执行的机械臂先回到 Idle，再关闭 CSV。
+9. 检查对应 Session 文件夹包含三份 Arm CSV、`metadata.csv` 和 `session_summary.csv`。
+10. Session 外仍可运行传送带、推流和机械臂，但不会写训练 CSV。
+
+Control Room 面板显示三路实时画面、目标与决策、成功/失败/Skip、成功率、平均抓取及周期时间、利用率和吞吐量。若页面显示 `UNITY OFFLINE`，先确认 Unity 正在 Play Mode，并检查 Server 是否为修改后的当前进程。

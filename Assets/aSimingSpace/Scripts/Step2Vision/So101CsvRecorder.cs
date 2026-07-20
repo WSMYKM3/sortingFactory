@@ -15,8 +15,8 @@ namespace SortingFactory.Step8
             "/Users/simon/Documents/WsmFiles/SortingFactoryScreenshots/csvdata";
 
         private const string Header =
-            "record_type,run_id,episode_id,arm_id,camera_id,utc_timestamp," +
-            "unity_time_s,episode_time_s,camera_frame_id," +
+            "record_type,session_id,episode_id,arm_id,camera_id,utc_timestamp," +
+            "unity_time_s,session_time_s,episode_time_s,camera_frame_id," +
             "observation_shoulder_pan,observation_shoulder_lift," +
             "observation_elbow_flex,observation_wrist_flex," +
             "observation_wrist_roll,observation_gripper," +
@@ -31,7 +31,6 @@ namespace SortingFactory.Step8
 
         [SerializeField, Min(1f)] private float sampleRateHz = 10f;
 
-        private static string runId;
         private WorkstationPickDecisionController decisionController;
         private WorkstationCameraController cameraController;
         private PrototypeRobotArmIKController robotController;
@@ -40,18 +39,15 @@ namespace SortingFactory.Step8
         private float nextFlushTime;
         private string timedEpisodeId = string.Empty;
         private double timedEpisodeStartedAt;
+        private string sessionId = string.Empty;
+        private double sessionStartedAt;
         private bool configured;
 
-        public string RunId => GetRunId();
+        public string SessionId => sessionId;
+        public bool IsRecording => writer != null;
         public string OutputPath { get; private set; } = string.Empty;
         public long FrameRecordCount { get; private set; }
         public long EpisodeRecordCount { get; private set; }
-
-        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-        private static void ResetRunId()
-        {
-            runId = string.Empty;
-        }
 
         public void Configure(
             WorkstationPickDecisionController newDecisionController,
@@ -73,7 +69,29 @@ namespace SortingFactory.Step8
             }
 
             decisionController.EpisodeCompleted += OnEpisodeCompleted;
+        }
+
+        public bool StartSession(string newSessionId)
+        {
+            if (!configured || string.IsNullOrWhiteSpace(newSessionId))
+            {
+                return false;
+            }
+
+            StopSession();
+            sessionId = newSessionId.Trim();
+            sessionStartedAt = Time.unscaledTimeAsDouble;
+            timedEpisodeId = string.Empty;
+            timedEpisodeStartedAt = 0d;
+            FrameRecordCount = 0;
+            EpisodeRecordCount = 0;
             OpenWriter();
+            return writer != null;
+        }
+
+        public void StopSession()
+        {
+            CloseWriter();
         }
 
         private void LateUpdate()
@@ -99,12 +117,7 @@ namespace SortingFactory.Step8
                 decisionController.EpisodeCompleted -= OnEpisodeCompleted;
             }
 
-            if (writer != null)
-            {
-                writer.Flush();
-                writer.Dispose();
-                writer = null;
-            }
+            CloseWriter();
         }
 
         private void OpenWriter()
@@ -116,10 +129,10 @@ namespace SortingFactory.Step8
 
             try
             {
-                string runFolder = Path.Combine(OutputRoot, GetRunId());
-                Directory.CreateDirectory(runFolder);
+                string sessionFolder = Path.Combine(OutputRoot, sessionId);
+                Directory.CreateDirectory(sessionFolder);
                 OutputPath = Path.Combine(
-                    runFolder,
+                    sessionFolder,
                     $"{cameraController.RobotArmId}.csv");
                 writer = new StreamWriter(
                     OutputPath,
@@ -129,15 +142,26 @@ namespace SortingFactory.Step8
                 writer.Flush();
                 nextSampleTime = Time.unscaledTime;
                 nextFlushTime = Time.unscaledTime + 1f;
-                Debug.Log($"Step 8 SO-101 CSV recording started: {OutputPath}", this);
+                Debug.Log($"SO-101 Session CSV recording started: {OutputPath}", this);
             }
             catch (Exception exception)
             {
-                configured = false;
                 Debug.LogError(
                     $"Could not start SO-101 CSV recording at {OutputRoot}: {exception.Message}",
                     this);
             }
+        }
+
+        private void CloseWriter()
+        {
+            if (writer == null)
+            {
+                return;
+            }
+
+            writer.Flush();
+            writer.Dispose();
+            writer = null;
         }
 
         private void WriteFrameRecord()
@@ -149,8 +173,8 @@ namespace SortingFactory.Step8
                 decisionController.ActiveEpisodeId,
                 target,
                 evaluation);
-            row[37] = decisionController.ActiveOutcome;
-            row[38] = decisionController.ActiveFailureReason;
+            row[38] = decisionController.ActiveOutcome;
+            row[39] = decisionController.ActiveFailureReason;
             writer.WriteLine(JoinCsv(row));
             FrameRecordCount++;
         }
@@ -169,13 +193,13 @@ namespace SortingFactory.Step8
                 summary.EpisodeId,
                 null,
                 evaluation);
-            row[25] = summary.LogicalTargetId.ToString(CultureInfo.InvariantCulture);
-            row[27] = summary.ClassName;
-            row[37] = summary.Succeeded ? "success" : "failed";
-            row[38] = summary.FailureReason;
-            row[39] = Format(summary.GraspDurationSeconds);
-            row[40] = Format(summary.CycleDurationSeconds);
-            row[41] = summary.Succeeded ? "true" : "false";
+            row[26] = summary.LogicalTargetId.ToString(CultureInfo.InvariantCulture);
+            row[28] = summary.ClassName;
+            row[38] = summary.Succeeded ? "success" : "failed";
+            row[39] = summary.FailureReason;
+            row[40] = Format(summary.GraspDurationSeconds);
+            row[41] = Format(summary.CycleDurationSeconds);
+            row[42] = summary.Succeeded ? "true" : "false";
             writer.WriteLine(JoinCsv(row));
             writer.Flush();
             EpisodeRecordCount++;
@@ -201,12 +225,13 @@ namespace SortingFactory.Step8
             return new[]
             {
                 recordType,
-                GetRunId(),
+                sessionId,
                 episodeId ?? string.Empty,
                 cameraController.RobotArmId,
                 cameraController.CameraId,
                 DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
                 Format(Time.unscaledTime),
+                Format((float)Math.Max(0d, Time.unscaledTimeAsDouble - sessionStartedAt)),
                 episodeTime,
                 cameraController.CapturedFrameCount.ToString(CultureInfo.InvariantCulture),
                 Format(pan), Format(lift), Format(elbow), Format(wristFlex),
@@ -232,7 +257,9 @@ namespace SortingFactory.Step8
                 evaluation == null ? string.Empty : Format(evaluation.RemainingTime),
                 evaluation == null ? string.Empty : Format(evaluation.RequiredTime),
                 evaluation == null ? string.Empty : evaluation.Decision.ToString(),
-                evaluation != null && evaluation.HasCrossedLatestPickLine ? "true" : "false",
+                evaluation == null
+                    ? string.Empty
+                    : evaluation.HasCrossedLatestPickLine ? "true" : "false",
                 string.Empty,
                 string.Empty,
                 string.Empty,
@@ -292,17 +319,6 @@ namespace SortingFactory.Step8
                 ? decisionController.CycleTargetLogicalId
                 : target.LogicalId;
             return targetId < 0 ? null : decisionController.GetEvaluation(targetId);
-        }
-
-        private static string GetRunId()
-        {
-            if (string.IsNullOrEmpty(runId))
-            {
-                runId = DateTime.Now.ToString(
-                    "yyyy-MM-dd_HH-mm-ss-fff",
-                    CultureInfo.InvariantCulture);
-            }
-            return runId;
         }
 
         private static string Format(float value)
