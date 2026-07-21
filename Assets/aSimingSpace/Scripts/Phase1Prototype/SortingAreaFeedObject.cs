@@ -24,7 +24,6 @@ namespace SortingFactory.Phase1
         private enum FeedState
         {
             Waiting,
-            ApproachingFeeder,
             FollowingFeeder,
             OnMainConveyor
         }
@@ -90,12 +89,8 @@ namespace SortingFactory.Phase1
                     elapsedTime += Time.fixedDeltaTime;
                     if (elapsedTime >= releaseDelay && TryReserveFeederEntrance())
                     {
-                        state = FeedState.ApproachingFeeder;
+                        EnterFeeder();
                     }
-                    break;
-
-                case FeedState.ApproachingFeeder:
-                    MoveToFeederEntrance();
                     break;
 
                 case FeedState.FollowingFeeder:
@@ -104,24 +99,21 @@ namespace SortingFactory.Phase1
             }
         }
 
-        private void MoveToFeederEntrance()
+        private void EnterFeeder()
         {
-            Vector3 target = (Vector3)feederPath.EvaluatePosition(0f) + Vector3.up * heightAboveFeeder;
-            Vector3 nextPosition = Vector3.MoveTowards(body.position, target, conveyorSpeed * Time.fixedDeltaTime);
-            Vector3 direction = target - body.position;
+            Vector3 position = (Vector3)feederPath.EvaluatePosition(0f) +
+                Vector3.up * heightAboveFeeder;
+            Vector3 tangent = feederPath.EvaluateTangent(0f);
+            tangent.y = 0f;
 
-            body.MovePosition(nextPosition);
-            if (direction.sqrMagnitude > 0.0001f)
+            body.position = position;
+            if (tangent.sqrMagnitude > 0.0001f)
             {
-                direction.y = 0f;
-                body.MoveRotation(Quaternion.LookRotation(direction.normalized, Vector3.up));
+                body.rotation = Quaternion.LookRotation(tangent.normalized, Vector3.up);
             }
 
-            if ((nextPosition - target).sqrMagnitude <= 0.0004f)
-            {
-                feederDistance = 0f;
-                state = FeedState.FollowingFeeder;
-            }
+            feederDistance = 0f;
+            state = FeedState.FollowingFeeder;
         }
 
         private void FollowFeeder()

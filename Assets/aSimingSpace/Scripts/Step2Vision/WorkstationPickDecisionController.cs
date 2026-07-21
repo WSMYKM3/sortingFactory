@@ -434,6 +434,12 @@ namespace SortingFactory.Step4
                     "RobotArmPlaceholder_REPLACE_ME");
                 if (placeholder == null)
                 {
+                    So101RobotArmRig rig = workstation.RobotMount.GetComponentInChildren<
+                        So101RobotArmRig>(true);
+                    placeholder = rig == null ? null : rig.transform;
+                }
+                if (placeholder == null)
+                {
                     return;
                 }
 

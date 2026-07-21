@@ -25,7 +25,7 @@ namespace SortingFactory.Phase1
         [SerializeField] private Vector2 sortingAreaSize = new Vector2(8f, 6f);
         [SerializeField, Min(0.2f)] private float feederBeltWidth = 2.6f;
         [SerializeField, Range(0.2f, 1f)] private float initialObjectScale = 0.62f;
-        [SerializeField, Min(0.2f)] private float objectReleaseInterval = DetectionBoxReleaseInterval;
+        [SerializeField, Min(0.05f)] private float objectReleaseInterval = DetectionBoxReleaseInterval;
         [SerializeField, Min(0f)] private float conveyorObjectSpeed = 0.5f;
         [SerializeField] private int randomSeed = 2026;
         [SerializeField] private GameObject[] objectPrefabs;
@@ -44,7 +44,7 @@ namespace SortingFactory.Phase1
 
         public const string SceneContentRootName = "Phase1 Scene Content";
         public const int CurrentGeneratedContentVersion = 2;
-        public const float DetectionBoxReleaseInterval = 1.2f;
+        public const float DetectionBoxReleaseInterval = 0.5f;
 
         public GameObject RobotArmPrefab => robotArmPrefab;
         public float ConveyorObjectSpeed => conveyorRunning ? conveyorObjectSpeed : 0f;
